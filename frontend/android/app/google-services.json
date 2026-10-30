@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "165464716243",
+    "project_id": "qnxmart",
+    "storage_bucket": "qnxmart.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:165464716243:android:b8829d73ed47fd44d87526",
+        "android_client_info": {
+          "package_name": "com.example.battery_regeneration_system"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAgM_dhU8hhD5m93tIwRVH086hKz2DAL98"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
