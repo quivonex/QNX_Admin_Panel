@@ -242,8 +242,7 @@ class _MarketingHeadDashboardState extends State<MarketingHeadDashboard>
         return const MyTeamScreen();
       case 'Referred Companies':
         return const ReferredCompaniesScreen();
-      case 'Agreement':
-        return const CreateAgreementScreen();
+
       case 'Bank Details':
         return const CreateBankDetailsScreen();
       case 'Orders':

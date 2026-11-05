@@ -1,14 +1,10 @@
-// ============================================================
-// ✅ MARKETING PARTNER AGREEMENT MODEL
-// ============================================================
-
-import 'dart:typed_data';
-// ============================================================
-// ✅ MARKETING PARTNER AGREEMENT MODEL
-// ============================================================
+// lib/models/marketing_partner/marketing_agreement_model.dart
 
 import 'dart:typed_data';
 
+// ============================================================
+// ✅ MARKETING PARTNER AGREEMENT DATA MODEL
+// ============================================================
 class MarketingPartnerAgreementData {
   final int agreementId;
   final String agreementNumber;
@@ -36,14 +32,16 @@ class MarketingPartnerAgreementData {
   final String? marketingPartnerPictureUrl;
   final String? marketingPartnerPictureS3Key;
 
-  // ✅ PDF — both url + s3 key
+  // ✅ PDF
   final String? uploadedAgreementPdfUrl;
   final String? uploadedAgreementPdfS3Key;
 
   final String status;
+  final String agreementStage;
   final int? createdBy;
   final int? approvedBy;
   final String? approvedAt;
+  final String? partnerSignedAt;
   final String? rejectionReason;
   final String? createdAt;
   final String? updatedAt;
@@ -76,78 +74,17 @@ class MarketingPartnerAgreementData {
     this.uploadedAgreementPdfUrl,
     this.uploadedAgreementPdfS3Key,
     required this.status,
+    required this.agreementStage,
     this.createdBy,
     this.approvedBy,
     this.approvedAt,
+    this.partnerSignedAt,
     this.rejectionReason,
     this.createdAt,
     this.updatedAt,
   });
 
   factory MarketingPartnerAgreementData.fromJson(Map<String, dynamic> json) {
-    // ✅ Check uploaded_files object (returned by create endpoint)
-    Map<String, dynamic>? uploadedFiles =
-    json['uploaded_files'] as Map<String, dynamic>?;
-
-    // ✅ Helper to extract key/url from either top-level or uploaded_files
-    String? pickKey(String topKey, String filesKey) {
-      final top = json[topKey]?.toString();
-      if (top != null && top.isNotEmpty) return top;
-      final f = uploadedFiles?[filesKey];
-      if (f is Map) {
-        final k = f['key']?.toString();
-        if (k != null && k.isNotEmpty) return k;
-      }
-      return top;
-    }
-
-    String? pickUrl(String topKey, String filesKey) {
-      final top = json[topKey]?.toString();
-      if (top != null && top.isNotEmpty) return top;
-      final f = uploadedFiles?[filesKey];
-      if (f is Map) {
-        final u = f['url']?.toString();
-        if (u != null && u.isNotEmpty) return u;
-      }
-      return top;
-    }
-
-    // PDF
-    String? pdfKey = pickKey(
-      'uploaded_agreement_pdf_s3_key',
-      'uploaded_agreement_pdf',
-    );
-    String? pdfUrl = pickUrl(
-      'uploaded_agreement_pdf_url',
-      'uploaded_agreement_pdf',
-    );
-
-    // Sign / picture keys (also exposed so the detail view can render them)
-    String? qnxSignKey =
-    pickKey('qnx_mart_sign_s3_key', 'qnx_mart_sign');
-    String? qnxSignUrl =
-    pickUrl('qnx_mart_sign_url', 'qnx_mart_sign');
-    String? mpSignKey = pickKey(
-      'marketing_partner_sign_s3_key',
-      'marketing_partner_sign',
-    );
-    String? mpSignUrl = pickUrl(
-      'marketing_partner_sign_url',
-      'marketing_partner_sign',
-    );
-    String? qnxPicKey =
-    pickKey('qnx_mart_picture_s3_key', 'qnx_mart_picture');
-    String? qnxPicUrl =
-    pickUrl('qnx_mart_picture_url', 'qnx_mart_picture');
-    String? mpPicKey = pickKey(
-      'marketing_partner_picture_s3_key',
-      'marketing_partner_picture',
-    );
-    String? mpPicUrl = pickUrl(
-      'marketing_partner_picture_url',
-      'marketing_partner_picture',
-    );
-
     return MarketingPartnerAgreementData(
       agreementId: json['agreement_id'] ?? 0,
       agreementNumber: json['agreement_number'] ?? '',
@@ -156,8 +93,7 @@ class MarketingPartnerAgreementData {
       agreementRole: json['agreement_role'] ?? 'marketing_partner',
       agreementStartDate: json['agreement_start_date'] ?? '',
       agreementEndDate: json['agreement_end_date'] ?? '',
-      marketingPartnerAddress:
-      json['marketing_partner_address']?.toString(),
+      marketingPartnerAddress: json['marketing_partner_address']?.toString(),
       companyCommissionPercentage:
       json['company_commission_percentage']?.toString() ?? '0',
       profitSharePercentage:
@@ -169,27 +105,60 @@ class MarketingPartnerAgreementData {
       remarks: json['remarks']?.toString(),
       adharNumber: json['adhar_number']?.toString(),
       panNumber: json['pan_number']?.toString(),
-      qnxMartSignUrl: qnxSignUrl,
-      qnxMartSignS3Key: qnxSignKey,
-      marketingPartnerSignUrl: mpSignUrl,
-      marketingPartnerSignS3Key: mpSignKey,
-      qnxMartPictureUrl: qnxPicUrl,
-      qnxMartPictureS3Key: qnxPicKey,
-      marketingPartnerPictureUrl: mpPicUrl,
-      marketingPartnerPictureS3Key: mpPicKey,
-      uploadedAgreementPdfUrl: pdfUrl,
-      uploadedAgreementPdfS3Key: pdfKey,
+      qnxMartSignUrl: json['qnx_mart_sign_url']?.toString(),
+      qnxMartSignS3Key: json['qnx_mart_sign_s3_key']?.toString(),
+      marketingPartnerSignUrl: json['marketing_partner_sign_url']?.toString(),
+      marketingPartnerSignS3Key:
+      json['marketing_partner_sign_s3_key']?.toString(),
+      qnxMartPictureUrl: json['qnx_mart_picture_url']?.toString(),
+      qnxMartPictureS3Key: json['qnx_mart_picture_s3_key']?.toString(),
+      marketingPartnerPictureUrl:
+      json['marketing_partner_picture_url']?.toString(),
+      marketingPartnerPictureS3Key:
+      json['marketing_partner_picture_s3_key']?.toString(),
+      uploadedAgreementPdfUrl:
+      json['uploaded_agreement_pdf_url']?.toString(),
+      uploadedAgreementPdfS3Key:
+      json['uploaded_agreement_pdf_s3_key']?.toString(),
       status: json['status'] ?? 'pending',
+      agreementStage: json['agreement_stage'] ?? 'draft',
       createdBy: json['created_by'],
       approvedBy: json['approved_by'],
       approvedAt: json['approved_at']?.toString(),
+      partnerSignedAt: json['partner_signed_at']?.toString(),
       rejectionReason: json['rejection_reason']?.toString(),
       createdAt: json['created_at']?.toString(),
       updatedAt: json['updated_at']?.toString(),
     );
   }
 
-  // ✅ Resolve full PDF URL (url → s3 key → https://qnxmart.s3.amazonaws.com/key)
+  // ============================================================
+  // ✅ STATE GETTERS
+  // ============================================================
+  bool get isPending => status == 'pending';
+  bool get isApproved => status == 'approved' && agreementStage == 'finalized';
+  bool get isRejected => status == 'rejected';
+  bool get isTerminated => agreementStage == 'terminated';
+  bool get isSignedByPartner => agreementStage == 'signed_by_partner';
+  bool get isDraft => agreementStage == 'draft';
+
+  /// Partner ने sign करू शकतो का?
+  bool get canPartnerSign =>
+      !isTerminated &&
+          !isApproved &&
+          !isRejected &&
+          (isDraft || agreementStage == 'signed_by_partner');
+
+  /// Partner ने reject करू शकतो का?
+  bool get canPartnerReject =>
+      !isTerminated && !isApproved && !isRejected && !isSignedByPartner;
+
+  /// PDF download available का? (फक्त approved/finalized)
+  bool get canDownloadPdf => isApproved && !isTerminated;
+
+  // ============================================================
+  // ✅ RESOLVE URLs
+  // ============================================================
   String? get pdfUrl {
     if (uploadedAgreementPdfUrl != null &&
         uploadedAgreementPdfUrl!.isNotEmpty) {
@@ -206,7 +175,6 @@ class MarketingPartnerAgreementData {
 
   bool get hasPdf => pdfUrl != null;
 
-  // ✅ Resolvers for sign / picture
   String? get qnxSignDisplayUrl {
     if (qnxMartSignUrl != null && qnxMartSignUrl!.isNotEmpty) {
       return qnxMartSignUrl;
@@ -269,7 +237,7 @@ class MarketingPartnerAgreementData {
 }
 
 // ============================================================
-// ✅ MARKETING PARTNER AGREEMENT LIST RESPONSE
+// ✅ LIST RESPONSE (my-list)
 // ============================================================
 class MarketingPartnerAgreementListResponse {
   final bool success;
@@ -284,7 +252,8 @@ class MarketingPartnerAgreementListResponse {
     required this.data,
   });
 
-  factory MarketingPartnerAgreementListResponse.fromJson(Map<String, dynamic> json) {
+  factory MarketingPartnerAgreementListResponse.fromJson(
+      Map<String, dynamic> json) {
     return MarketingPartnerAgreementListResponse(
       success: json['success'] ?? false,
       message: json['message'] ?? '',
@@ -297,7 +266,7 @@ class MarketingPartnerAgreementListResponse {
 }
 
 // ============================================================
-// ✅ MARKETING PARTNER AGREEMENT CREATE RESPONSE
+// ✅ CREATE RESPONSE
 // ============================================================
 class MarketingPartnerAgreementCreateResponse {
   final bool success;
@@ -310,7 +279,8 @@ class MarketingPartnerAgreementCreateResponse {
     this.data,
   });
 
-  factory MarketingPartnerAgreementCreateResponse.fromJson(Map<String, dynamic> json) {
+  factory MarketingPartnerAgreementCreateResponse.fromJson(
+      Map<String, dynamic> json) {
     return MarketingPartnerAgreementCreateResponse(
       success: json['success'] ?? false,
       message: json['message'] ?? '',
@@ -322,57 +292,71 @@ class MarketingPartnerAgreementCreateResponse {
 }
 
 // ============================================================
-// ✅ MARKETING PARTNER AGREEMENT APPROVE RESPONSE
+// ✅ PARTNER SIGN RESPONSE
 // ============================================================
-class MarketingPartnerAgreementApproveResponse {
+class MarketingPartnerSignResponse {
   final bool success;
   final String message;
-  final MarketingPartnerAgreementData? data;
+  final PartnerSignData? data;
 
-  MarketingPartnerAgreementApproveResponse({
+  MarketingPartnerSignResponse({
     required this.success,
     required this.message,
     this.data,
   });
 
-  factory MarketingPartnerAgreementApproveResponse.fromJson(Map<String, dynamic> json) {
-    return MarketingPartnerAgreementApproveResponse(
+  factory MarketingPartnerSignResponse.fromJson(Map<String, dynamic> json) {
+    return MarketingPartnerSignResponse(
       success: json['success'] ?? false,
       message: json['message'] ?? '',
       data: json['data'] != null
-          ? MarketingPartnerAgreementData.fromJson(json['data'])
+          ? PartnerSignData.fromJson(json['data'])
           : null,
     );
   }
 }
 
-// ============================================================
-// ✅ MARKETING PARTNER AGREEMENT REJECT RESPONSE
-// ============================================================
-class MarketingPartnerAgreementRejectResponse {
-  final bool success;
-  final String message;
-  final MarketingPartnerAgreementData? data;
+class PartnerSignData {
+  final int agreementId;
+  final String agreementNumber;
+  final String status;
+  final String agreementStage;
+  final String? partnerSignedAt;
+  final String? adharNumber;
+  final String? panNumber;
+  final String? marketingPartnerSignUrl;
+  final String? rejectionReason;
 
-  MarketingPartnerAgreementRejectResponse({
-    required this.success,
-    required this.message,
-    this.data,
+  PartnerSignData({
+    required this.agreementId,
+    required this.agreementNumber,
+    required this.status,
+    required this.agreementStage,
+    this.partnerSignedAt,
+    this.adharNumber,
+    this.panNumber,
+    this.marketingPartnerSignUrl,
+    this.rejectionReason,
   });
 
-  factory MarketingPartnerAgreementRejectResponse.fromJson(Map<String, dynamic> json) {
-    return MarketingPartnerAgreementRejectResponse(
-      success: json['success'] ?? false,
-      message: json['message'] ?? '',
-      data: json['data'] != null
-          ? MarketingPartnerAgreementData.fromJson(json['data'])
-          : null,
+  factory PartnerSignData.fromJson(Map<String, dynamic> json) {
+    return PartnerSignData(
+      agreementId: json['agreement_id'] ?? 0,
+      agreementNumber: json['agreement_number'] ?? '',
+      status: json['status'] ?? '',
+      agreementStage: json['agreement_stage'] ?? '',
+      partnerSignedAt: json['partner_signed_at']?.toString(),
+      adharNumber: json['adhar_number']?.toString(),
+      panNumber: json['pan_number']?.toString(),
+      marketingPartnerSignUrl:
+      json['marketing_partner_sign_url']?.toString(),
+      rejectionReason: json['rejection_reason']?.toString(),
     );
   }
 }
 
 // ============================================================
-// ✅ MARKETING PARTNER AGREEMENT CREATE MODEL (Request)
+// ✅ CREATE REQUEST MODEL (QNX Admin साठी)
 // ============================================================
 class MarketingPartnerAgreementModel {
   final String agreementNumber;
@@ -410,7 +394,7 @@ class MarketingPartnerAgreementModel {
     required this.additionalPoints,
     required this.qnxMartRepresentative,
     this.remarks,
-    this.adharNumber,     // ✅ ADD
+    this.adharNumber,
     this.panNumber,
     this.qnxMartSign,
     this.marketingPartnerSign,

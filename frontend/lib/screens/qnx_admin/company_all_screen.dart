@@ -7,6 +7,7 @@ import 'dart:html' as html;
 import '../../api/api_service.dart';
 import '../../models/qnx_admin/company_model.dart';
 import '../../models/qnx_admin/agreement_model.dart';
+import '../qnx_admin/update_amount_screen.dart';
 import '../../api/api_response.dart';
 import 'package:linked_scroll_controller/linked_scroll_controller.dart';
 
@@ -17,7 +18,7 @@ class CompanyAllScreen extends StatefulWidget {
   State<CompanyAllScreen> createState() => _CompanyAllScreenState();
 }
 
-class _CompanyAllScreenState extends State<CompanyAllScreen> {
+class _CompanyAllScreenState extends State<CompanyAllScreen> with TickerProviderStateMixin {
   final CompanyAllService _service = CompanyAllService();
   final CompanySoftDeleteService _softDeleteService = CompanySoftDeleteService();
   final CompanyRestoreService _restoreService = CompanyRestoreService();
@@ -46,6 +47,11 @@ class _CompanyAllScreenState extends State<CompanyAllScreen> {
   List<AgreementProductModel> companyProducts = [];
   bool isLoadingProducts = false;
 
+  // ✅ NEW: Animation controllers for Update Amount button
+  late AnimationController _updateAmountBorderController;
+  late Animation<Color?> _updateAmountBorderColor;
+  bool _isUpdateAmountHovered = false;
+
   // Premium gradient colors (matching dashboard)
   static const Color _premiumPrimary = Color(0xFF4158D0);
   static const Color _premiumSecondary = Color(0xFFC850C0);
@@ -57,6 +63,16 @@ class _CompanyAllScreenState extends State<CompanyAllScreen> {
     _headerHorizontalController = _linkedControllers.addAndGet();
     _rowsHorizontalController = _linkedControllers.addAndGet();
     loadCompanies();
+    // ✅ NEW: Update Amount button border animation
+    _updateAmountBorderController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat(reverse: true);
+
+    _updateAmountBorderColor = ColorTween(
+      begin: const Color(0xFF11998E),
+      end: const Color(0xFF38EF7D),
+    ).animate(_updateAmountBorderController);
   }
 
   @override
@@ -65,7 +81,9 @@ class _CompanyAllScreenState extends State<CompanyAllScreen> {
     _rowsHorizontalController.dispose();
     _verticalController.dispose();
     _searchController.dispose();
+    _updateAmountBorderController.dispose();
     super.dispose();
+
   }
 
   Future<void> loadCompanies() async {
@@ -1247,6 +1265,93 @@ class _CompanyAllScreenState extends State<CompanyAllScreen> {
       );
     }
   }
+  // ✅ NEW: Open Update Amount dialog
+  void _showUpdateAmountDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => const UpdateAmountScreen(),
+    );
+  }
+
+// ✅ NEW: Premium animated Update Amount button (same style as dashboard)
+  Widget _buildUpdateAmountButton(bool isMobile) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isUpdateAmountHovered = true),
+      onExit: (_) => setState(() => _isUpdateAmountHovered = false),
+      cursor: SystemMouseCursors.click,
+      child: AnimatedBuilder(
+        animation: _updateAmountBorderController,
+        builder: (context, child) {
+          final animatedColor =
+              _updateAmountBorderColor.value ?? const Color(0xFF11998E);
+
+          return AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            transform: Matrix4.translationValues(
+              0,
+              _isUpdateAmountHovered ? -2 : 0,
+              0,
+            ),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF11998E), Color(0xFF38EF7D)],
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+              ),
+              borderRadius: BorderRadius.circular(25),
+              border: Border.all(color: animatedColor, width: 1.5),
+              boxShadow: [
+                BoxShadow(
+                  color: animatedColor.withOpacity(
+                    _isUpdateAmountHovered ? 0.6 : 0.4,
+                  ),
+                  blurRadius: _isUpdateAmountHovered ? 12 : 8,
+                  spreadRadius: _isUpdateAmountHovered ? 2 : 1,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: _showUpdateAmountDialog,
+                borderRadius: BorderRadius.circular(25),
+                child: Container(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: isMobile ? 10 : 14,
+                    vertical: isMobile ? 8 : 10,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.currency_rupee_rounded,
+                        size: isMobile ? 14 : 16,
+                        color: Colors.white,
+                      ),
+                      if (!isMobile) ...[
+                        const SizedBox(width: 6),
+                        const Text(
+                          'Update Amount',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                            letterSpacing: 0.3,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
 
   List<Widget> _buildFilterChips() {
     return ["All", "Active", "Inactive"].map((type) {
@@ -1713,6 +1818,13 @@ class _CompanyAllScreenState extends State<CompanyAllScreen> {
         backgroundColor: Colors.white,
         foregroundColor: Colors.black,
         elevation: 0,
+        actions: [
+          // ✅ NEW: Update Amount button
+          Padding(
+            padding: const EdgeInsets.only(right: 16, top: 8, bottom: 8),
+            child: _buildUpdateAmountButton(isMobile),
+          ),
+        ],
       ),
       body: isLoading
           ? const Center(child: CircularProgressIndicator())

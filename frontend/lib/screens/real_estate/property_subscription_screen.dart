@@ -1,6 +1,13 @@
+// lib/screens/real_estate/property_subscription_screen.dart
+//
+// Real Estate subscription plans — card-based layout that matches the OLX
+// Plan screen (page header, filter bar, plan cards, create/edit dialogs,
+// pagination). Existing API calls, models, export (Excel / PDF / DOC),
+// update and local-list-refresh behaviour are preserved.
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
-import 'package:linked_scroll_controller/linked_scroll_controller.dart';
 import 'package:excel/excel.dart' as excel;
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
@@ -8,6 +15,53 @@ import 'dart:html' as html;
 
 import '../../api/realestate_service.dart';
 import '../../models/real_estate/property_subscription_model.dart';
+
+// ---------------------------------------------------------------------------
+// Screen palette — same colours as the OLX Plan screen.
+// ---------------------------------------------------------------------------
+const Color _kBrand = Color(0xFF6366F1);
+const Color _kInk = Color(0xFF1E293B);
+const Color _kBody = Color(0xFF475569);
+const Color _kMuted = Color(0xFF64748B);
+const Color _kFaint = Color(0xFF94A3B8);
+const Color _kBorder = Color(0xFFE2E8F0);
+const Color _kCanvas = Color(0xFFF8FAFC);
+const Color _kSuccess = Color(0xFF10B981);
+
+// ---------------------------------------------------------------------------
+// Formatting helpers
+// ---------------------------------------------------------------------------
+String _formatDate(String? dateStr) {
+  if (dateStr == null || dateStr.isEmpty) return '-';
+  try {
+    final dt = DateTime.parse(dateStr);
+    return DateFormat('dd/MM/yyyy HH:mm').format(dt);
+  } catch (_) {
+    return dateStr;
+  }
+}
+
+String _formatPrice(double price) {
+  final formatter = NumberFormat('#,##,##0.00', 'en_IN');
+  return '₹${formatter.format(price)}';
+}
+
+String _validityLabel(int days) {
+  if (days <= 0) return 'Validity not configured';
+  if (days % 365 == 0) {
+    final y = days ~/ 365;
+    return 'Valid for $y ${y == 1 ? 'year' : 'years'} ($days days)';
+  }
+  if (days % 30 == 0) {
+    final m = days ~/ 30;
+    return 'Valid for $m ${m == 1 ? 'month' : 'months'} ($days days)';
+  }
+  if (days % 7 == 0) {
+    final w = days ~/ 7;
+    return 'Valid for $w ${w == 1 ? 'week' : 'weeks'} ($days days)';
+  }
+  return 'Valid for $days ${days == 1 ? 'day' : 'days'}';
+}
 
 class PropertySubscriptionScreen extends StatefulWidget {
   const PropertySubscriptionScreen({super.key});
@@ -17,144 +71,137 @@ class PropertySubscriptionScreen extends StatefulWidget {
       _PropertySubscriptionScreenState();
 }
 
-class _PropertySubscriptionScreenState extends State<PropertySubscriptionScreen>
-    with TickerProviderStateMixin {
+class _PropertySubscriptionScreenState
+    extends State<PropertySubscriptionScreen> {
   final PropertySubscriptionService _service = PropertySubscriptionService();
+
+  final TextEditingController _searchController = TextEditingController();
 
   List<PropertySubscriptionData> allPlans = [];
   List<PropertySubscriptionData> filteredPlans = [];
   List<PropertySubscriptionData> paginatedPlans = [];
 
-  bool isLoading = true;
+  bool _isLoading = true;
+  String? _loadError;
 
-  // Search & Filter
-  // Search & Filter
-  final TextEditingController _planNameController = TextEditingController();
-  String planNameQuery = '';
-  String filterType = 'All'; // All / Active / Inactive / Days / Price
+  // Search / filter / sort
+  String searchQuery = '';
+  String filterStatus = 'All';
+  String sortOption = _sortNewest;
+  static const List<String> _statusOptions = ['All', 'Active', 'Inactive'];
+  static const String _sortNewest = 'Newest first';
+  static const String _sortDays = 'Days (low to high)';
+  static const String _sortPriceAsc = 'Price (low to high)';
+  static const String _sortPriceDesc = 'Price (high to low)';
+  static const List<String> _sortOptions = [
+    _sortNewest,
+    _sortDays,
+    _sortPriceAsc,
+    _sortPriceDesc,
+  ];
 
   // Pagination
   int currentPage = 1;
-  int itemsPerPage = 10;
+  int itemsPerPage = 9;
   int totalPages = 1;
-  final List<int> rowsPerPageOptions = [5, 10, 15, 20, 25, 30, 50];
+  final List<int> rowsPerPageOptions = [3, 6, 9, 12, 15, 30];
 
-  // Scroll Controllers
-  late LinkedScrollControllerGroup _linkedControllers;
-  late ScrollController _headerHorizontalController;
-  late ScrollController _rowsHorizontalController;
-  final ScrollController _verticalController = ScrollController();
+  // Card accents — same tones as the OLX Plan screen.
+  static const List<Color> _cardAccents = [
+    Color(0xFF10B981), // emerald
+    Color(0xFF0EA5E9), // sky
+    Color(0xFF1E3A5F), // deep navy
+    Color(0xFF6366F1), // indigo
+    Color(0xFF8B5CF6), // violet
+    Color(0xFFF59E0B), // amber
+  ];
 
-  // Hover / Border Animation
-  late AnimationController _borderAnimationController;
-  late Animation<Color?> _borderColorAnimation;
-  bool _isCreateButtonHovered = false;
-
-  // Premium Colors
-  static const Color _premiumPrimary = Color(0xFF4158D0);
-  static const Color _premiumSecondary = Color(0xFFC850C0);
-
-  // Column Widths (ID column removed)
-  final Map<int, TableColumnWidth> columnWidths = const {
-    0: FixedColumnWidth(60),   // SR No
-    1: FixedColumnWidth(200),  // Name
-    2: FixedColumnWidth(100),  // Days
-    3: FixedColumnWidth(120),  // Price
-    4: FixedColumnWidth(100),  // Status
-    5: FixedColumnWidth(150),  // Created
-    6: FixedColumnWidth(150),  // Updated
-    7: FixedColumnWidth(100),  // Action
-  };
-
-  final List<String> headerLabels = [
-    "SR No", "Plan Name", "Days", "Price", "Status",
-    "Created", "Updated", "Action"
+  static const List<IconData> _cardIcons = [
+    Icons.apartment_rounded,
+    Icons.home_work_outlined,
+    Icons.key_rounded,
+    Icons.workspace_premium_outlined,
+    Icons.rocket_launch_outlined,
+    Icons.star_outline_rounded,
   ];
 
   @override
   void initState() {
     super.initState();
-    _linkedControllers = LinkedScrollControllerGroup();
-    _headerHorizontalController = _linkedControllers.addAndGet();
-    _rowsHorizontalController = _linkedControllers.addAndGet();
-
-    _borderAnimationController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    )..repeat(reverse: true);
-
-    _borderColorAnimation = ColorTween(
-      begin: _premiumPrimary,
-      end: _premiumSecondary,
-    ).animate(_borderAnimationController);
-
     loadPlans();
   }
 
   @override
   void dispose() {
-    _planNameController.dispose();
-    _headerHorizontalController.dispose();
-    _rowsHorizontalController.dispose();
-    _verticalController.dispose();
-    _borderAnimationController.dispose();
+    _searchController.dispose();
     _service.dispose();
     super.dispose();
   }
+
+  // ==================== LOAD (EXISTING API CALL PRESERVED) ====================
   Future<void> loadPlans() async {
-    setState(() => isLoading = true);
+    setState(() {
+      _isLoading = true;
+      _loadError = null;
+    });
     try {
       final response = await _service.getPlans();
       if (mounted) {
         setState(() {
           allPlans = response.data;
           allPlans.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+          _isLoading = false;
           applyFilters();
-          isLoading = false;
         });
       }
     } catch (e) {
       if (mounted) {
-        setState(() => isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to load plans: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        setState(() {
+          _isLoading = false;
+          _loadError =
+          'Plans could not be loaded. Check your connection and try again.';
+        });
+        _showSnackBar('Failed to load plans: $e', isError: true);
       }
     }
   }
 
+  bool get _hasActiveFilters =>
+      searchQuery.isNotEmpty ||
+          filterStatus != 'All' ||
+          sortOption != _sortNewest;
+
   void applyFilters() {
-    // ---- First filter by Search (plan name) ----
-    List<PropertySubscriptionData> base = allPlans;
-    if (planNameQuery.isNotEmpty) {
-      base = base
-          .where((p) =>
-          p.name.toLowerCase().contains(planNameQuery.toLowerCase()))
-          .toList();
+    final query = searchQuery.trim().toLowerCase();
+
+    var list = allPlans.where((p) {
+      final matchesSearch = query.isEmpty ||
+          p.name.toLowerCase().contains(query) ||
+          '${p.days}'.contains(query) ||
+          p.price.toString().contains(query);
+
+      final matchesStatus = filterStatus == 'All' ||
+          (filterStatus == 'Active' && p.isActive) ||
+          (filterStatus == 'Inactive' && !p.isActive);
+
+      return matchesSearch && matchesStatus;
+    }).toList();
+
+    switch (sortOption) {
+      case _sortDays:
+        list.sort((a, b) => a.days.compareTo(b.days));
+        break;
+      case _sortPriceAsc:
+        list.sort((a, b) => a.price.compareTo(b.price));
+        break;
+      case _sortPriceDesc:
+        list.sort((a, b) => b.price.compareTo(a.price));
+        break;
+      default:
+        list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
     }
 
-    // ---- Then apply dropdown filter ----
-    if (filterType == 'All') {
-      filteredPlans = base;
-    } else if (filterType == 'Active') {
-      filteredPlans = base.where((p) => p.isActive == true).toList();
-    } else if (filterType == 'Inactive') {
-      filteredPlans = base.where((p) => p.isActive == false).toList();
-    } else if (filterType == 'Days') {
-      // Sort by days ascending
-      filteredPlans = List.from(base)
-        ..sort((a, b) => a.days.compareTo(b.days));
-    } else if (filterType == 'Price') {
-      // Sort by price ascending
-      filteredPlans = List.from(base)
-        ..sort((a, b) => a.price.compareTo(b.price));
-    } else {
-      filteredPlans = base;
-    }
-
+    filteredPlans = list;
     applyPagination();
   }
 
@@ -173,9 +220,8 @@ class _PropertySubscriptionScreenState extends State<PropertySubscriptionScreen>
 
     int startIndex = (currentPage - 1) * itemsPerPage;
     int endIndex = startIndex + itemsPerPage;
-    if (endIndex > filteredPlans.length) {
-      endIndex = filteredPlans.length;
-    }
+    if (endIndex > filteredPlans.length) endIndex = filteredPlans.length;
+
     paginatedPlans = filteredPlans.sublist(startIndex, endIndex);
     setState(() {});
   }
@@ -207,315 +253,56 @@ class _PropertySubscriptionScreenState extends State<PropertySubscriptionScreen>
     }
   }
 
+  void changeItemsPerPage(int? value) {
+    if (value != null) {
+      setState(() {
+        itemsPerPage = value;
+        currentPage = 1;
+        applyPagination();
+      });
+    }
+  }
+
   void resetFilters() {
     setState(() {
-      planNameQuery = '';
-      filterType = 'All';
-      _planNameController.clear();
+      searchQuery = '';
+      filterStatus = 'All';
+      sortOption = _sortNewest;
+      _searchController.clear();
       currentPage = 1;
       applyFilters();
     });
   }
-  String formatDate(String? dateStr) {
-    if (dateStr == null || dateStr.isEmpty) return '-';
-    try {
-      final dt = DateTime.parse(dateStr);
-      return DateFormat('dd/MM/yyyy HH:mm').format(dt);
-    } catch (_) {
-      return dateStr;
-    }
-  }
 
-  String formatPrice(double price) {
-    final formatter = NumberFormat('#,##,##0.00', 'en_IN');
-    return '₹${formatter.format(price)}';
-  }
-
-  // ==================== CREATE PLAN FORM ====================
-  void _showCreateForm() {
-    final formKey = GlobalKey<FormState>();
-    final nameController = TextEditingController();
-    final daysController = TextEditingController();
-    final priceController = TextEditingController();
-    bool isSubmitting = false;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          backgroundColor: Colors.transparent,
-          child: Container(
-            width: 500,
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(context).size.height * 0.85,
-            ),
-            decoration: BoxDecoration(
+  void _showSnackBar(String message, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(
+              isError ? Icons.error_outline : Icons.check_circle_outline,
               color: Colors.white,
-              borderRadius: BorderRadius.circular(24),
-              boxShadow: [
-                BoxShadow(
-                  color: _premiumPrimary.withOpacity(0.3),
-                  blurRadius: 40,
-                  offset: const Offset(0, 15),
-                ),
-              ],
+              size: 20,
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Header
-                Container(
-                  padding: const EdgeInsets.fromLTRB(24, 20, 20, 16),
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.centerLeft,
-                      end: Alignment.centerRight,
-                      colors: [Color(0xFF4158D0), Color(0xFFC850C0)],
-                    ),
-                    borderRadius: BorderRadius.only(
-                      topLeft: Radius.circular(24),
-                      topRight: Radius.circular(24),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: const Icon(Icons.add_circle_outline,
-                            color: Colors.white, size: 24),
-                      ),
-                      const SizedBox(width: 14),
-                      const Expanded(
-                        child: Text(
-                          'Create Subscription Plan',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(30),
-                        ),
-                        child: IconButton(
-                          icon: const Icon(Icons.close, color: Colors.white),
-                          onPressed: isSubmitting
-                              ? null
-                              : () => Navigator.pop(context),
-                          padding: const EdgeInsets.all(8),
-                          constraints: const BoxConstraints(),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // Body
-                Flexible(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(24),
-                    child: Form(
-                      key: formKey,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _buildFormField(
-                            label: 'Plan Name',
-                            controller: nameController,
-                            icon: Icons.card_membership,
-                            hint: 'e.g., 30 Days Plan',
-                            validator: (v) =>
-                            (v == null || v.trim().isEmpty)
-                                ? 'Please enter plan name'
-                                : null,
-                          ),
-                          const SizedBox(height: 16),
-                          _buildFormField(
-                            label: 'Days',
-                            controller: daysController,
-                            icon: Icons.calendar_today,
-                            hint: 'e.g., 30',
-                            keyboardType: TextInputType.number,
-                            validator: (v) {
-                              if (v == null || v.trim().isEmpty) {
-                                return 'Please enter days';
-                              }
-                              if (int.tryParse(v) == null) {
-                                return 'Enter a valid number';
-                              }
-                              if (int.parse(v) <= 0) {
-                                return 'Days must be greater than 0';
-                              }
-                              return null;
-                            },
-                          ),
-                          const SizedBox(height: 16),
-                          _buildFormField(
-                            label: 'Price (₹)',
-                            controller: priceController,
-                            icon: Icons.currency_rupee,
-                            hint: 'e.g., 999.00',
-                            keyboardType: const TextInputType.numberWithOptions(
-                                decimal: true),
-                            validator: (v) {
-                              if (v == null || v.trim().isEmpty) {
-                                return 'Please enter price';
-                              }
-                              if (double.tryParse(v) == null) {
-                                return 'Enter a valid price';
-                              }
-                              if (double.parse(v) < 0) {
-                                return 'Price cannot be negative';
-                              }
-                              return null;
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-
-                // Footer
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade50,
-                    borderRadius: const BorderRadius.only(
-                      bottomLeft: Radius.circular(24),
-                      bottomRight: Radius.circular(24),
-                    ),
-                    border: Border(top: BorderSide(color: Colors.grey.shade200)),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: isSubmitting
-                              ? null
-                              : () => Navigator.pop(context),
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            side: BorderSide(color: Colors.grey.shade300),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          child: const Text('Cancel'),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        flex: 2,
-                        child: ElevatedButton.icon(
-                          onPressed: isSubmitting
-                              ? null
-                              : () async {
-                            if (!formKey.currentState!.validate()) return;
-                            setDialogState(() => isSubmitting = true);
-                            try {
-                              final request =
-                              PropertySubscriptionCreateRequest(
-                                name: nameController.text.trim(),
-                                days: int.parse(daysController.text.trim()),
-                                price:
-                                double.parse(priceController.text.trim()),
-                              );
-                              final response =
-                              await _service.createPlan(request);
-
-                              if (!mounted) return;
-                              Navigator.pop(context);
-
-                              if (response.success) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(response.message),
-                                    backgroundColor: Colors.green,
-                                  ),
-                                );
-
-                                // ✅ Add new plan to local list immediately
-                                if (response.data != null) {
-                                  allPlans.insert(0, response.data!);
-                                  allPlans.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-                                }
-
-                                setState(() => applyFilters());
-                              } else {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(response.message),
-                                    backgroundColor: Colors.red,
-                                  ),
-                                );
-                              }
-                            } catch (e) {
-                              if (!mounted) return;
-                              setDialogState(() => isSubmitting = false);
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Error: $e'),
-                                  backgroundColor: Colors.red,
-                                ),
-                              );
-                            }
-                          },
-                          icon: isSubmitting
-                              ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2,
-                            ),
-                          )
-                              : const Icon(Icons.check_circle, size: 18),
-                          label: Text(
-                            isSubmitting ? 'Creating...' : 'Create Plan',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 15,
-                            ),
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _premiumPrimary,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            disabledBackgroundColor:
-                            _premiumPrimary.withOpacity(0.5),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
+            const SizedBox(width: 10),
+            Expanded(child: Text(message)),
+          ],
         ),
+        backgroundColor: isError ? Colors.red.shade600 : _kBrand,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
     );
   }
-  // ==================== EXPORT FUNCTIONS ====================
+
+  // ==================== EXPORT FUNCTIONS (PRESERVED) ====================
   void exportExcel() {
     final file = excel.Excel.createExcel();
     final sheet = file['Subscription Plans'];
     sheet.appendRow([
-      "SR No", "Plan Name", "Days", "Price", "Status",
-      "Created At", "Updated At"
+      'SR No', 'Plan Name', 'Days', 'Price', 'Status',
+      'Created At', 'Updated At'
     ]);
 
     int srNo = filteredPlans.length;
@@ -526,8 +313,8 @@ class _PropertySubscriptionScreenState extends State<PropertySubscriptionScreen>
         p.days,
         p.price,
         p.isActive ? 'Active' : 'Inactive',
-        formatDate(p.createdAt),
-        formatDate(p.updatedAt),
+        _formatDate(p.createdAt),
+        _formatDate(p.updatedAt),
       ]);
     }
 
@@ -536,7 +323,7 @@ class _PropertySubscriptionScreenState extends State<PropertySubscriptionScreen>
       final blob = html.Blob([bytes]);
       final url = html.Url.createObjectUrlFromBlob(blob);
       html.AnchorElement(href: url)
-        ..setAttribute("download", "subscription_plans.xlsx")
+        ..setAttribute('download', 'subscription_plans.xlsx')
         ..click();
       html.Url.revokeObjectUrl(url);
     }
@@ -549,8 +336,8 @@ class _PropertySubscriptionScreenState extends State<PropertySubscriptionScreen>
         build: (pw.Context context) {
           return pw.Table.fromTextArray(
             headers: [
-              "SR No", "Plan Name", "Days", "Price", "Status",
-              "Created", "Updated"
+              'SR No', 'Plan Name', 'Days', 'Price', 'Status',
+              'Created', 'Updated'
             ],
             data: List.generate(filteredPlans.length, (index) {
               final p = filteredPlans[index];
@@ -559,10 +346,10 @@ class _PropertySubscriptionScreenState extends State<PropertySubscriptionScreen>
                 srNo.toString(),
                 p.name,
                 p.days.toString(),
-                formatPrice(p.price),
+                _formatPrice(p.price),
                 p.isActive ? 'Active' : 'Inactive',
-                formatDate(p.createdAt),
-                formatDate(p.updatedAt),
+                _formatDate(p.createdAt),
+                _formatDate(p.updatedAt),
               ];
             }),
           );
@@ -574,766 +361,501 @@ class _PropertySubscriptionScreenState extends State<PropertySubscriptionScreen>
 
   void exportDOC() {
     final content = StringBuffer();
-    content.writeln("Property Subscription Plans\n");
-    content.writeln("=" * 50);
+    content.writeln('Property Subscription Plans\n');
+    content.writeln('=' * 50);
 
     int srNo = filteredPlans.length;
     for (var p in filteredPlans) {
-      content.writeln("SR No: ${srNo--}");
-      content.writeln("Plan Name: ${p.name}");
-      content.writeln("Days: ${p.days}");
-      content.writeln("Price: ${formatPrice(p.price)}");
-      content.writeln("Status: ${p.isActive ? 'Active' : 'Inactive'}");
-      content.writeln("Created: ${formatDate(p.createdAt)}");
-      content.writeln("Updated: ${formatDate(p.updatedAt)}");
-      content.writeln("-" * 30);
+      content.writeln('SR No: ${srNo--}');
+      content.writeln('Plan Name: ${p.name}');
+      content.writeln('Days: ${p.days}');
+      content.writeln('Price: ${_formatPrice(p.price)}');
+      content.writeln('Status: ${p.isActive ? 'Active' : 'Inactive'}');
+      content.writeln('Created: ${_formatDate(p.createdAt)}');
+      content.writeln('Updated: ${_formatDate(p.updatedAt)}');
+      content.writeln('-' * 30);
     }
 
     final blob = html.Blob([content.toString()]);
     final url = html.Url.createObjectUrlFromBlob(blob);
     html.AnchorElement(href: url)
-      ..setAttribute("download", "subscription_plans.doc")
+      ..setAttribute('download', 'subscription_plans.doc')
       ..click();
     html.Url.revokeObjectUrl(url);
   }
 
-  // ==================== UPDATE PLAN FORM ====================
-  void _showUpdateForm(PropertySubscriptionData plan) {
+  // ==================== CREATE / UPDATE PLAN POPUP ====================
+  // One dialog for both flows. `plan == null` → create, otherwise → update.
+  Future<void> _openPlanFormDialog({PropertySubscriptionData? plan}) async {
+    final isEdit = plan != null;
     final formKey = GlobalKey<FormState>();
-    final nameController = TextEditingController(text: plan.name);
-    final daysController = TextEditingController(text: plan.days.toString());
-    final priceController = TextEditingController(text: plan.price.toString());
-    bool isActive = plan.isActive;
+    final nameController = TextEditingController(text: plan?.name ?? '');
+    final daysController =
+    TextEditingController(text: plan != null ? '${plan.days}' : '');
+    final priceController =
+    TextEditingController(text: plan != null ? '${plan.price}' : '');
+    bool isActive = plan?.isActive ?? true;
     bool isSubmitting = false;
+    String? formError;
 
-    showDialog(
+    await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          backgroundColor: Colors.transparent,
-          child: Container(
-            width: 500,
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(context).size.height * 0.85,
-            ),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(24),
-              boxShadow: [
-                BoxShadow(
-                  color: _premiumPrimary.withOpacity(0.3),
-                  blurRadius: 40,
-                  offset: const Offset(0, 15),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Header
-                Container(
-                  padding: const EdgeInsets.fromLTRB(24, 20, 20, 16),
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.centerLeft,
-                      end: Alignment.centerRight,
-                      colors: [Color(0xFF4158D0), Color(0xFFC850C0)],
-                    ),
-                    borderRadius: BorderRadius.only(
-                      topLeft: Radius.circular(24),
-                      topRight: Radius.circular(24),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: const Icon(Icons.edit,
-                            color: Colors.white, size: 24),
-                      ),
-                      const SizedBox(width: 14),
-                      const Expanded(
-                        child: Text(
-                          'Update Subscription Plan',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(30),
-                        ),
-                        child: IconButton(
-                          icon: const Icon(Icons.close, color: Colors.white),
-                          onPressed: isSubmitting
-                              ? null
-                              : () => Navigator.pop(context),
-                          padding: const EdgeInsets.all(8),
-                          constraints: const BoxConstraints(),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final theme = Theme.of(context);
+            final media = MediaQuery.of(context).size;
+            final isSmall = media.width < 640;
+            final dialogWidth =
+            isSmall ? media.width : (media.width < 1024 ? 520.0 : 560.0);
 
-                // Body
-                Flexible(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(24),
-                    child: Form(
-                      key: formKey,
-                      child: Column(
+            Future<void> submit() async {
+              if (!formKey.currentState!.validate()) return;
+              setDialogState(() {
+                isSubmitting = true;
+                formError = null;
+              });
+
+              try {
+                if (!isEdit) {
+                  final response = await _service.createPlan(
+                    PropertySubscriptionCreateRequest(
+                      name: nameController.text.trim(),
+                      days: int.parse(daysController.text.trim()),
+                      price: double.parse(priceController.text.trim()),
+                    ),
+                  );
+                  if (!mounted) return;
+
+                  if (response.success) {
+                    Navigator.of(dialogContext).pop();
+                    // Add new plan to local list immediately
+                    if (response.data != null) {
+                      allPlans.insert(0, response.data!);
+                      allPlans
+                          .sort((a, b) => b.createdAt.compareTo(a.createdAt));
+                    }
+                    setState(() => applyFilters());
+                    _showSnackBar(response.message.isNotEmpty
+                        ? response.message
+                        : 'Plan created successfully');
+                  } else {
+                    setDialogState(() {
+                      isSubmitting = false;
+                      formError = response.message;
+                    });
+                  }
+                } else {
+                  final response = await _service.updatePlan(
+                    PropertySubscriptionUpdateRequest(
+                      id: plan!.id,
+                      name: nameController.text.trim(),
+                      days: int.parse(daysController.text.trim()),
+                      price: double.parse(priceController.text.trim()),
+                      isActive: isActive,
+                    ),
+                  );
+                  if (!mounted) return;
+
+                  if (response.success) {
+                    Navigator.of(dialogContext).pop();
+                    // Update in local lists — no reload and no re-filter, so
+                    // the edited plan stays visible exactly where it is.
+                    if (response.data != null) {
+                      final updated = response.data!;
+                      final aIdx =
+                      allPlans.indexWhere((p) => p.id == updated.id);
+                      if (aIdx != -1) allPlans[aIdx] = updated;
+                      final fIdx =
+                      filteredPlans.indexWhere((p) => p.id == updated.id);
+                      if (fIdx != -1) filteredPlans[fIdx] = updated;
+                      final pIdx =
+                      paginatedPlans.indexWhere((p) => p.id == updated.id);
+                      if (pIdx != -1) paginatedPlans[pIdx] = updated;
+                    }
+                    setState(() {});
+                    _showSnackBar(response.message.isNotEmpty
+                        ? response.message
+                        : 'Plan updated successfully');
+                  } else {
+                    setDialogState(() {
+                      isSubmitting = false;
+                      formError = response.message;
+                    });
+                  }
+                }
+              } catch (e) {
+                if (!mounted) return;
+                setDialogState(() {
+                  isSubmitting = false;
+                  formError = '$e'.replaceFirst('Exception: ', '');
+                });
+              }
+            }
+
+            final cancelButton = OutlinedButton(
+              onPressed: isSubmitting
+                  ? null
+                  : () => Navigator.of(dialogContext).pop(),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _kBody,
+                side: const BorderSide(color: _kBorder),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              child: const Text('Cancel'),
+            );
+
+            final submitButton = FilledButton.icon(
+              onPressed: isSubmitting ? null : submit,
+              style: FilledButton.styleFrom(
+                backgroundColor: _kBrand,
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: _kBrand.withOpacity(0.6),
+                disabledForegroundColor: Colors.white,
+                padding:
+                const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              icon: isSubmitting
+                  ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  color: Colors.white,
+                  strokeWidth: 2,
+                ),
+              )
+                  : Icon(isEdit ? Icons.save_rounded : Icons.add_rounded,
+                  size: 20),
+              label: Text(
+                isSubmitting
+                    ? (isEdit ? 'Updating...' : 'Creating...')
+                    : (isEdit ? 'Update Plan' : 'Create Plan'),
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            );
+
+            Widget nameField() => _buildTextField(
+              controller: nameController,
+              label: 'Plan Name',
+              icon: Icons.label_outline,
+              hint: 'e.g. 30 Days Plan',
+              enabled: !isSubmitting,
+              validator: (v) => (v == null || v.trim().isEmpty)
+                  ? 'Plan Name is required'
+                  : null,
+            );
+
+            Widget daysField() => _buildTextField(
+              controller: daysController,
+              label: 'Duration (Days)',
+              icon: Icons.timer_outlined,
+              hint: 'e.g. 30',
+              enabled: !isSubmitting,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              validator: (v) {
+                final text = (v ?? '').trim();
+                if (text.isEmpty) return 'Duration (Days) is required';
+                final days = int.tryParse(text);
+                if (days == null || days <= 0) {
+                  return 'Enter a valid number of days';
+                }
+                return null;
+              },
+            );
+
+            Widget priceField() => _buildTextField(
+              controller: priceController,
+              label: 'Price (₹)',
+              icon: Icons.currency_rupee_rounded,
+              hint: 'e.g. 999.00',
+              enabled: !isSubmitting,
+              keyboardType:
+              const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+              ],
+              validator: (v) {
+                final text = (v ?? '').trim();
+                if (text.isEmpty) return 'Price is required';
+                final price = double.tryParse(text);
+                if (price == null) return 'Enter a valid price';
+                if (price < 0) return 'Price cannot be negative';
+                return null;
+              },
+            );
+
+            return Dialog(
+              insetPadding: EdgeInsets.symmetric(
+                horizontal: isSmall ? 12 : 24,
+                vertical: 24,
+              ),
+              backgroundColor: Colors.white,
+              surfaceTintColor: Colors.transparent,
+              clipBehavior: Clip.antiAlias,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20)),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: dialogWidth,
+                  maxHeight: media.height * 0.9,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Header
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(24, 20, 12, 16),
+                      child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          _buildFormField(
-                            label: 'Plan Name',
-                            controller: nameController,
-                            icon: Icons.card_membership,
-                            hint: 'e.g., 30 Days Plan',
-                            validator: (v) =>
-                            (v == null || v.trim().isEmpty)
-                                ? 'Please enter plan name'
-                                : null,
-                          ),
-                          const SizedBox(height: 16),
-                          _buildFormField(
-                            label: 'Days',
-                            controller: daysController,
-                            icon: Icons.calendar_today,
-                            hint: 'e.g., 30',
-                            keyboardType: TextInputType.number,
-                            validator: (v) {
-                              if (v == null || v.trim().isEmpty) {
-                                return 'Please enter days';
-                              }
-                              if (int.tryParse(v) == null) {
-                                return 'Enter a valid number';
-                              }
-                              if (int.parse(v) <= 0) {
-                                return 'Days must be greater than 0';
-                              }
-                              return null;
-                            },
-                          ),
-                          const SizedBox(height: 16),
-                          _buildFormField(
-                            label: 'Price (₹)',
-                            controller: priceController,
-                            icon: Icons.currency_rupee,
-                            hint: 'e.g., 999.00',
-                            keyboardType: const TextInputType.numberWithOptions(
-                                decimal: true),
-                            validator: (v) {
-                              if (v == null || v.trim().isEmpty) {
-                                return 'Please enter price';
-                              }
-                              if (double.tryParse(v) == null) {
-                                return 'Enter a valid price';
-                              }
-                              if (double.parse(v) < 0) {
-                                return 'Price cannot be negative';
-                              }
-                              return null;
-                            },
-                          ),
-                          const SizedBox(height: 20),
-                          // Active toggle
                           Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 14, vertical: 4),
+                            width: 44,
+                            height: 44,
                             decoration: BoxDecoration(
-                              color: Colors.grey.shade50,
+                              color: _kBrand.withOpacity(0.1),
                               borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.grey.shade200),
                             ),
-                            child: Row(
+                            child: Icon(
+                              isEdit
+                                  ? Icons.edit_outlined
+                                  : Icons.post_add_rounded,
+                              color: _kBrand,
+                              size: 22,
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Icon(
-                                  isActive
-                                      ? Icons.check_circle
-                                      : Icons.cancel,
-                                  color: isActive
-                                      ? Colors.green
-                                      : Colors.grey,
-                                  size: 22,
+                                Text(
+                                  isEdit ? 'Update Plan' : 'Create Plan',
+                                  style: theme.textTheme.titleLarge?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    color: _kInk,
+                                  ),
                                 ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Text(
-                                    isActive ? 'Active' : 'Inactive',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 14,
+                                const SizedBox(height: 2),
+                                Text(
+                                  isEdit
+                                      ? 'Edit this property subscription plan'
+                                      : 'Configure a new property subscription plan',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: _kMuted,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Close',
+                            onPressed: isSubmitting
+                                ? null
+                                : () => Navigator.of(dialogContext).pop(),
+                            icon:
+                            const Icon(Icons.close_rounded, color: _kMuted),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1, color: _kBorder),
+
+                    // Scrollable form body
+                    Flexible(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+                        child: Form(
+                          key: formKey,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (formError != null) ...[
+                                _buildFormErrorBanner(formError!),
+                                const SizedBox(height: 18),
+                              ],
+                              _buildSectionLabel('Plan details'),
+                              const SizedBox(height: 14),
+                              nameField(),
+                              const SizedBox(height: 16),
+                              if (isSmall) ...[
+                                daysField(),
+                                const SizedBox(height: 16),
+                                priceField(),
+                              ] else
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Expanded(child: daysField()),
+                                    const SizedBox(width: 16),
+                                    Expanded(child: priceField()),
+                                  ],
+                                ),
+                              if (isEdit) ...[
+                                const SizedBox(height: 24),
+                                _buildSectionLabel('Availability'),
+                                const SizedBox(height: 14),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 16, vertical: 12),
+                                  decoration: BoxDecoration(
+                                    color: _kCanvas,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: _kBorder),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        isActive
+                                            ? Icons
+                                            .check_circle_outline_rounded
+                                            : Icons
+                                            .pause_circle_outline_rounded,
+                                        color: isActive ? _kSuccess : _kMuted,
+                                        size: 22,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                          children: [
+                                            const Text(
+                                              'Active status',
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.w600,
+                                                color: _kInk,
+                                                fontSize: 14,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              isActive
+                                                  ? 'This plan will be saved as active'
+                                                  : 'This plan will be saved as inactive',
+                                              style: const TextStyle(
+                                                color: _kMuted,
+                                                fontSize: 12.5,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      Switch(
+                                        value: isActive,
+                                        activeTrackColor: _kBrand,
+                                        onChanged: isSubmitting
+                                            ? null
+                                            : (v) => setDialogState(
+                                                () => isActive = v),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    const Divider(height: 1, color: _kBorder),
+
+                    // Footer actions
+                    Container(
+                      color: _kCanvas,
+                      padding: const EdgeInsets.fromLTRB(24, 14, 24, 18),
+                      child: Row(
+                        children: isSmall
+                            ? [
+                          Expanded(child: cancelButton),
+                          const SizedBox(width: 12),
+                          Expanded(child: submitButton),
+                        ]
+                            : [
+                          Expanded(
+                            child: Text.rich(
+                              TextSpan(
+                                children: [
+                                  TextSpan(
+                                    text: '* ',
+                                    style: TextStyle(
+                                      color: theme.colorScheme.error,
+                                      fontWeight: FontWeight.w700,
                                     ),
                                   ),
-                                ),
-                                Switch(
-                                  value: isActive,
-                                  activeColor: _premiumPrimary,
-                                  onChanged: (v) =>
-                                      setDialogState(() => isActive = v),
-                                ),
-                              ],
+                                  const TextSpan(
+                                      text: 'Required fields'),
+                                ],
+                              ),
+                              style: const TextStyle(
+                                  color: _kMuted, fontSize: 12.5),
                             ),
                           ),
+                          cancelButton,
+                          const SizedBox(width: 12),
+                          submitButton,
                         ],
                       ),
                     ),
-                  ),
+                  ],
                 ),
-
-                // Footer
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade50,
-                    borderRadius: const BorderRadius.only(
-                      bottomLeft: Radius.circular(24),
-                      bottomRight: Radius.circular(24),
-                    ),
-                    border: Border(top: BorderSide(color: Colors.grey.shade200)),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: isSubmitting
-                              ? null
-                              : () => Navigator.pop(context),
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            side: BorderSide(color: Colors.grey.shade300),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          child: const Text('Cancel'),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        flex: 2,
-                        child: ElevatedButton.icon(
-                          onPressed: isSubmitting
-                              ? null
-                              : () async {
-                            if (!formKey.currentState!.validate()) return;
-                            setDialogState(() => isSubmitting = true);
-                            try {
-                              final request =
-                              PropertySubscriptionUpdateRequest(
-                                id: plan.id,
-                                name: nameController.text.trim(),
-                                days: int.parse(daysController.text.trim()),
-                                price:
-                                double.parse(priceController.text.trim()),
-                                isActive: isActive,
-                              );
-                              final response =
-                              await _service.updatePlan(request);
-
-                              if (!mounted) return;
-                              Navigator.pop(context);
-
-                              if (response.success) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(response.message),
-                                    backgroundColor: Colors.green,
-                                  ),
-                                );
-
-                                // ✅ Update existing plan in local lists — DO NOT reload,
-                                //    DO NOT touch filter, so plan stays visible in the table
-                                if (response.data != null) {
-                                  final updated = response.data!;
-
-                                  // Update in allPlans
-                                  final aIdx = allPlans.indexWhere((p) => p.id == updated.id);
-                                  if (aIdx != -1) {
-                                    allPlans[aIdx] = updated;
-                                  }
-
-                                  // Update in filteredPlans
-                                  final fIdx = filteredPlans.indexWhere((p) => p.id == updated.id);
-                                  if (fIdx != -1) {
-                                    filteredPlans[fIdx] = updated;
-                                  }
-
-                                  // Update in paginatedPlans
-                                  final pIdx = paginatedPlans.indexWhere((p) => p.id == updated.id);
-                                  if (pIdx != -1) {
-                                    paginatedPlans[pIdx] = updated;
-                                  }
-                                }
-
-                                // Rebuild UI so status badge updates
-                                setState(() {});
-                              } else {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(response.message),
-                                    backgroundColor: Colors.red,
-                                  ),
-                                );
-                              }
-                            } catch (e) {
-                              if (!mounted) return;
-                              setDialogState(() => isSubmitting = false);
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Error: $e'),
-                                  backgroundColor: Colors.red,
-                                ),
-                              );
-                            }
-                          },
-                          icon: isSubmitting
-                              ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2,
-                            ),
-                          )
-                              : const Icon(Icons.save, size: 18),
-                          label: Text(
-                            isSubmitting ? 'Updating...' : 'Update Plan',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 15,
-                            ),
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _premiumPrimary,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            disabledBackgroundColor:
-                            _premiumPrimary.withOpacity(0.5),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+              ),
+            );
+          },
+        );
+      },
     );
+
+    nameController.dispose();
+    daysController.dispose();
+    priceController.dispose();
   }
 
-  Widget _buildFormField({
-    required String label,
-    required TextEditingController controller,
-    required IconData icon,
-    String? hint,
-    TextInputType? keyboardType,
-    String? Function(String?)? validator,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: Color(0xFF1E293B),
-          ),
-        ),
-        const SizedBox(height: 6),
-        TextFormField(
-          controller: controller,
-          keyboardType: keyboardType,
-          validator: validator,
-          decoration: InputDecoration(
-            hintText: hint,
-            prefixIcon: Icon(icon, size: 18, color: _premiumPrimary),
-            filled: true,
-            fillColor: const Color(0xFFF8FAFC),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: Colors.grey.shade200),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: Colors.grey.shade200),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: _premiumPrimary, width: 1.5),
-            ),
-            contentPadding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-          ),
-        ),
-      ],
-    );
-  }
-  Widget _buildExportIcons() {
+  Widget _buildSectionLabel(String text) {
     return Row(
       children: [
-        Tooltip(
-          message: "Export Excel",
-          child: InkWell(
-            onTap: exportExcel,
-            borderRadius: BorderRadius.circular(10),
-            child: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.green.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Image.asset(
-                "assets/icon/xls.png",
-                height: 20,
-                width: 20,
-              ),
-            ),
+        Text(
+          text,
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+            color: _kInk,
           ),
         ),
-        const SizedBox(width: 8),
-        Tooltip(
-          message: "Export PDF",
-          child: InkWell(
-            onTap: exportPDF,
-            borderRadius: BorderRadius.circular(10),
-            child: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.red.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Image.asset(
-                "assets/icon/pdf.png",
-                height: 20,
-                width: 20,
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Tooltip(
-          message: "Export DOC",
-          child: InkWell(
-            onTap: exportDOC,
-            borderRadius: BorderRadius.circular(10),
-            child: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.blue.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Image.asset(
-                "assets/icon/doc.png",
-                height: 20,
-                width: 20,
-              ),
-            ),
-          ),
-        ),
+        const SizedBox(width: 12),
+        const Expanded(child: Divider(height: 1, color: _kBorder)),
       ],
     );
   }
 
-  // ==================== DETAILS POPUP (ID removed) ====================
-  void showDetailsPopup(PropertySubscriptionData plan) {
-    showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-        backgroundColor: Colors.transparent,
-        child: Container(
-          width: 520,
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(context).size.height * 0.85,
-          ),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(28),
-            boxShadow: [
-              BoxShadow(
-                color: _premiumPrimary.withOpacity(0.3),
-                blurRadius: 40,
-                offset: const Offset(0, 15),
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Header
-              Container(
-                padding: const EdgeInsets.fromLTRB(24, 20, 20, 16),
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.centerLeft,
-                    end: Alignment.centerRight,
-                    colors: [Color(0xFF4158D0), Color(0xFFC850C0)],
-                  ),
-                  borderRadius: BorderRadius.only(
-                    topLeft: Radius.circular(28),
-                    topRight: Radius.circular(28),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Icon(Icons.card_membership,
-                          color: Colors.white, size: 28),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            plan.name,
-                            style: const TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const SizedBox(height: 4),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: plan.isActive
-                                  ? Colors.green.withOpacity(0.3)
-                                  : Colors.grey.withOpacity(0.3),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  plan.isActive
-                                      ? Icons.check_circle
-                                      : Icons.cancel,
-                                  size: 12,
-                                  color: plan.isActive
-                                      ? Colors.green
-                                      : Colors.grey,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  plan.isActive ? 'Active' : 'Inactive',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    color: plan.isActive
-                                        ? Colors.green
-                                        : Colors.grey,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(30),
-                      ),
-                      child: IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white),
-                        onPressed: () => Navigator.pop(context),
-                        padding: const EdgeInsets.all(8),
-                        constraints: const BoxConstraints(),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              // Body
-              Flexible(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildInfoSection(
-                        'Plan Details',
-                        Icons.info_outline,
-                        [
-                          _infoRow('Plan Name', plan.name),
-                          _infoRow('Days', '${plan.days} days'),
-                          _infoRow('Price', formatPrice(plan.price)),
-                          _infoRow(
-                              'Status', plan.isActive ? 'Active' : 'Inactive'),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      _buildInfoSection(
-                        'Timestamps',
-                        Icons.calendar_today,
-                        [
-                          _infoRow('Created At', formatDate(plan.createdAt)),
-                          _infoRow('Updated At', formatDate(plan.updatedAt)),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              // Footer with Update Button
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade50,
-                  borderRadius: const BorderRadius.only(
-                    bottomLeft: Radius.circular(28),
-                    bottomRight: Radius.circular(28),
-                  ),
-                  border: Border(top: BorderSide(color: Colors.grey.shade200)),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () => Navigator.pop(context),
-                        icon: const Icon(Icons.arrow_back, size: 18),
-                        label: const Text('Close'),
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          side: BorderSide(color: Colors.grey.shade300),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      flex: 2,
-                      child: ElevatedButton.icon(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          _showUpdateForm(plan);
-                        },
-                        icon: const Icon(Icons.edit, size: 18),
-                        label: const Text(
-                          'Update Plan',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 15,
-                          ),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _premiumPrimary,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
+  Widget _buildFormErrorBanner(String message) {
+    final errorColor = Theme.of(context).colorScheme.error;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: errorColor.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: errorColor.withOpacity(0.3)),
       ),
-    );
-  }
-
-  Widget _buildInfoSection(String title, IconData icon, List<Widget> children) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF4158D0), Color(0xFFC850C0)],
-                ),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(icon, size: 16, color: Colors.white),
-            ),
-            const SizedBox(width: 10),
-            Text(
-              title,
-              style: const TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.bold,
-                color: Color(0xFF1A1A2E),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.grey.shade200),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: children,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _infoRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            width: 120,
-            child: Text(
-              label,
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                color: Colors.grey,
-              ),
-            ),
-          ),
+          Icon(Icons.error_outline, color: errorColor, size: 20),
+          const SizedBox(width: 10),
           Expanded(
             child: Text(
-              value,
-              style: const TextStyle(fontSize: 13),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
+              message,
+              style: TextStyle(color: errorColor, fontSize: 13, height: 1.4),
             ),
           ),
         ],
@@ -1341,739 +863,1503 @@ class _PropertySubscriptionScreenState extends State<PropertySubscriptionScreen>
     );
   }
 
-  // ==================== CREATE BUTTON with Running Outline + Hover ====================
-  Widget _buildAnimatedCreateButton() {
-    return MouseRegion(
-      onEnter: (_) => setState(() => _isCreateButtonHovered = true),
-      onExit: (_) => setState(() => _isCreateButtonHovered = false),
-      cursor: SystemMouseCursors.click,
-      child: AnimatedBuilder(
-        animation: _borderAnimationController,
-        builder: (context, child) {
-          final animatedColor =
-              _borderColorAnimation.value ?? _premiumPrimary;
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required String label,
+    required IconData icon,
+    String? hint,
+    bool enabled = true,
+    TextInputType keyboardType = TextInputType.text,
+    List<TextInputFormatter>? inputFormatters,
+    String? Function(String?)? validator,
+  }) {
+    final errorColor = Theme.of(context).colorScheme.error;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text.rich(
+          TextSpan(
+            children: [
+              TextSpan(text: label),
+              TextSpan(text: ' *', style: TextStyle(color: errorColor)),
+            ],
+          ),
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: _kInk,
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextFormField(
+          controller: controller,
+          keyboardType: keyboardType,
+          inputFormatters: inputFormatters,
+          enabled: enabled,
+          style: const TextStyle(fontSize: 14, color: _kInk),
+          validator: validator,
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: const TextStyle(color: _kFaint, fontSize: 13.5),
+            prefixIcon: Icon(icon, color: _kMuted, size: 20),
+            filled: true,
+            fillColor: _kCanvas,
+            contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: _kBorder),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: _kBorder),
+            ),
+            disabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: _kBorder),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: _kBrand, width: 1.6),
+            ),
+            errorBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: errorColor),
+            ),
+            focusedErrorBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: errorColor, width: 1.6),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
-          return AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            transform: Matrix4.translationValues(
-              0,
-              _isCreateButtonHovered ? -2 : 0,
-              0,
+  // ==================== PLAN DETAILS (READ-ONLY) ====================
+  Future<void> showDetailsPopup(
+      PropertySubscriptionData plan, Color accent, IconData icon) {
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        final isSmall = MediaQuery.of(ctx).size.width < 640;
+        return Dialog(
+          insetPadding: EdgeInsets.symmetric(
+            horizontal: isSmall ? 12 : 24,
+            vertical: 24,
+          ),
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
+          clipBehavior: Clip.antiAlias,
+          shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 480,
+              maxHeight: MediaQuery.of(ctx).size.height * 0.85,
             ),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF4158D0), Color(0xFFC850C0)],
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-              ),
-              borderRadius: BorderRadius.circular(25),
-              border: Border.all(
-                color: animatedColor,
-                width: 1.5,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: animatedColor.withOpacity(
-                    _isCreateButtonHovered ? 0.6 : 0.4,
-                  ),
-                  blurRadius: _isCreateButtonHovered ? 12 : 8,
-                  spreadRadius: _isCreateButtonHovered ? 2 : 1,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: _showCreateForm,
-                borderRadius: BorderRadius.circular(25),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 18, vertical: 10),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 20, 12, 16),
                   child: Row(
-                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(
-                        Icons.add_circle_outline,
-                        size: 18,
-                        color: Colors.white,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Create Plan',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
-                          letterSpacing: 0.3,
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: accent,
+                          shape: BoxShape.circle,
                         ),
+                        child: Icon(icon, color: Colors.white, size: 22),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              plan.name,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.titleLarge?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: _kInk,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            const Text(
+                              'Property subscription plan',
+                              style: TextStyle(color: _kMuted, fontSize: 13),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Close',
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        icon: const Icon(Icons.close_rounded, color: _kMuted),
                       ),
                     ],
                   ),
                 ),
-              ),
+                const Divider(height: 1, color: _kBorder),
+                Flexible(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(24, 22, 24, 6),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _detailRow(
+                          Icons.currency_rupee_rounded,
+                          'Price',
+                          value: _formatPrice(plan.price),
+                        ),
+                        _detailRow(
+                          Icons.schedule_rounded,
+                          'Duration',
+                          value: _validityLabel(plan.days),
+                        ),
+                        _detailRow(
+                          Icons.toggle_on_outlined,
+                          'Status',
+                          valueWidget: _StatusBadge(active: plan.isActive),
+                        ),
+                        _detailRow(
+                          Icons.event_available_outlined,
+                          'Created',
+                          value: _formatDate(plan.createdAt),
+                        ),
+                        _detailRow(
+                          Icons.update_rounded,
+                          'Last updated',
+                          value: _formatDate(plan.updatedAt),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const Divider(height: 1, color: _kBorder),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 14, 24, 18),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.of(ctx).pop();
+                          _openPlanFormDialog(plan: plan);
+                        },
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _kBrand,
+                          side: const BorderSide(color: _kBorder),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 20, vertical: 16),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                        ),
+                        icon: const Icon(Icons.edit_outlined, size: 18),
+                        label: const Text('Edit'),
+                      ),
+                      const SizedBox(width: 12),
+                      FilledButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _kBrand,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 24, vertical: 16),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                        ),
+                        child: const Text('Close'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          );
-        },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _detailRow(IconData icon, String label,
+      {String? value, Widget? valueWidget}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: _kCanvas,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _kBorder),
+            ),
+            child: Icon(icon, size: 18, color: _kMuted),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: _kMuted,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                valueWidget ??
+                    Text(
+                      value ?? '',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: _kInk,
+                        height: 1.45,
+                      ),
+                    ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  // ==================== FILTER SECTION ====================
-  // ==================== FILTER SECTION ====================
-  // ==================== FILTER SECTION ====================
-  // ==================== FILTER SECTION ====================
-  Widget _buildFilterSection(bool isMobile) {
-    // Dropdown options — All, Active, Inactive, Days, Price
-    final List<Map<String, dynamic>> dropdownOptions = [
-      {'value': 'All', 'label': 'All', 'icon': Icons.list},
-      {'value': 'Active', 'label': 'Active', 'icon': Icons.check_circle},
-      {'value': 'Inactive', 'label': 'Inactive', 'icon': Icons.cancel},
-      {'value': 'Days', 'label': 'Days', 'icon': Icons.calendar_today},
-      {'value': 'Price', 'label': 'Price', 'icon': Icons.currency_rupee},
-    ];
+  // ==================== BUILD ====================
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _kCanvas,
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth;
+            final isMobile = width < 700;
+            final horizontalPadding = isMobile ? 16.0 : 32.0;
+            final contentWidth =
+            (width - horizontalPadding * 2).clamp(0.0, 1280.0).toDouble();
 
-    // ============ Reusable Search Field ============
-    Widget searchField({double? width}) => Container(
-      width: width,
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      child: TextField(
-        controller: _planNameController,
-        decoration: InputDecoration(
-          hintText: 'Search by plan name...',
-          prefixIcon: const Icon(Icons.search,
-              size: 16, color: Color(0xFF6366F1)),
-          border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(vertical: 14),
-          suffixIcon: planNameQuery.isNotEmpty
-              ? IconButton(
-            icon: const Icon(Icons.clear, size: 16),
-            onPressed: () {
-              _planNameController.clear();
-              setState(() {
-                planNameQuery = '';
-                currentPage = 1;
-                applyFilters();
-              });
-            },
-          )
-              : null,
+            return SingleChildScrollView(
+              padding: EdgeInsets.symmetric(
+                horizontal: horizontalPadding,
+                vertical: isMobile ? 20 : 28,
+              ),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1280),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildPageHeader(contentWidth),
+                      const SizedBox(height: 22),
+                      _buildFilterSection(contentWidth),
+                      const SizedBox(height: 28),
+                      _buildPlansSection(contentWidth),
+                      const SizedBox(height: 8),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
         ),
-        onChanged: (value) {
-          setState(() {
-            planNameQuery = value;
-            currentPage = 1;
-            applyFilters();
-          });
-        },
       ),
     );
+  }
 
-    // ============ Reusable Dropdown ============
-    Widget dropdownField({double? width}) => Container(
-      width: width,
-      height: 42,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
+  int _columnsFor(double width) {
+    if (width >= 1080) return 3;
+    if (width >= 700) return 2;
+    return 1;
+  }
+
+  // ==================== PAGE HEADER ====================
+  Widget _buildExportIcons() {
+    Widget exportButton({
+      required String tooltip,
+      required VoidCallback onTap,
+      required String asset,
+      required Color tint,
+    }) {
+      return Tooltip(
+        message: tooltip,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: tint.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: tint.withOpacity(0.25)),
+            ),
+            child: Image.asset(asset, height: 20, width: 20),
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        exportButton(
+          tooltip: 'Export Excel',
+          onTap: exportExcel,
+          asset: 'assets/icon/xls.png',
+          tint: Colors.green,
+        ),
+        const SizedBox(width: 8),
+        exportButton(
+          tooltip: 'Export PDF',
+          onTap: exportPDF,
+          asset: 'assets/icon/pdf.png',
+          tint: Colors.red,
+        ),
+        const SizedBox(width: 8),
+        exportButton(
+          tooltip: 'Export DOC',
+          onTap: exportDOC,
+          asset: 'assets/icon/doc.png',
+          tint: Colors.blue,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPageHeader(double contentWidth) {
+    final theme = Theme.of(context);
+    final isCompact = contentWidth < 520;
+
+    final titleBlock = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Property Subscription Plans',
+          style: theme.textTheme.headlineSmall?.copyWith(
+            color: _kInk,
+            fontWeight: FontWeight.w700,
+            letterSpacing: -0.3,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Manage and configure your real estate subscription plans',
+          style: theme.textTheme.bodyMedium?.copyWith(color: _kMuted),
+        ),
+      ],
+    );
+
+    final createButton = FilledButton.icon(
+      onPressed: () => _openPlanFormDialog(),
+      style: FilledButton.styleFrom(
+        backgroundColor: _kBrand,
+        foregroundColor: Colors.white,
+        elevation: 2,
+        shadowColor: _kBrand.withOpacity(0.45),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
       ),
+      icon: const Icon(Icons.add_rounded, size: 20),
+      label: const Text('Create Plan'),
+    );
+
+    if (isCompact) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          titleBlock,
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              _buildExportIcons(),
+              const SizedBox(width: 12),
+              Expanded(child: createButton),
+            ],
+          ),
+        ],
+      );
+    }
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(child: titleBlock),
+        const SizedBox(width: 16),
+        _buildExportIcons(),
+        const SizedBox(width: 16),
+        createButton,
+      ],
+    );
+  }
+
+  // ==================== FILTER SECTION ====================
+  InputDecoration _filterDecoration({
+    required String label,
+    required IconData icon,
+    String? hint,
+  }) {
+    return InputDecoration(
+      labelText: label,
+      hintText: hint,
+      floatingLabelBehavior: FloatingLabelBehavior.always,
+      isDense: true,
+      labelStyle: const TextStyle(color: _kMuted, fontSize: 13),
+      hintStyle: const TextStyle(color: _kFaint, fontSize: 13.5),
+      prefixIcon: Icon(icon, size: 18, color: _kMuted),
+      prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+      filled: true,
+      fillColor: _kCanvas,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: _kBorder),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: _kBorder),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: _kBrand, width: 1.5),
+      ),
+    );
+  }
+
+  Widget _buildDropdown<T>({
+    required String label,
+    required IconData icon,
+    required T value,
+    required List<T> items,
+    required ValueChanged<T?> onChanged,
+  }) {
+    return InputDecorator(
+      decoration: _filterDecoration(label: label, icon: icon),
       child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: filterType,
-          icon: const Icon(Icons.arrow_drop_down,
-              color: Color(0xFF6366F1)),
-          style: const TextStyle(
-              color: Color(0xFF1E293B), fontSize: 13),
+        child: DropdownButton<T>(
+          value: value,
           isExpanded: true,
-          onChanged: (String? newValue) {
+          isDense: true,
+          borderRadius: BorderRadius.circular(12),
+          dropdownColor: Colors.white,
+          icon: const Icon(Icons.keyboard_arrow_down_rounded,
+              size: 20, color: _kMuted),
+          style: const TextStyle(fontSize: 14, color: _kInk),
+          items: items
+              .map((e) => DropdownMenuItem<T>(
+            value: e,
+            child: Text('$e', overflow: TextOverflow.ellipsis),
+          ))
+              .toList(),
+          onChanged: onChanged,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFilterSection(double contentWidth) {
+    final isWide = contentWidth >= 1000;
+    final isMobile = contentWidth < 600;
+
+    final searchField = TextField(
+      controller: _searchController,
+      style: const TextStyle(fontSize: 14, color: _kInk),
+      decoration: _filterDecoration(
+        label: 'Search plans',
+        hint: 'Name, days or price',
+        icon: Icons.search_rounded,
+      ).copyWith(
+        suffixIcon: searchQuery.isNotEmpty
+            ? IconButton(
+          tooltip: 'Clear search',
+          icon: const Icon(Icons.close_rounded, size: 18),
+          onPressed: () {
+            _searchController.clear();
             setState(() {
-              filterType = newValue!;
+              searchQuery = '';
               currentPage = 1;
               applyFilters();
             });
           },
-          items: dropdownOptions.map<DropdownMenuItem<String>>((opt) {
-            return DropdownMenuItem<String>(
-              value: opt['value'] as String,
-              child: Row(
-                children: [
-                  Icon(
-                    opt['icon'] as IconData,
-                    size: 14,
-                    color: const Color(0xFF6366F1),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(opt['label'] as String),
-                ],
-              ),
-            );
-          }).toList(),
-        ),
+        )
+            : null,
       ),
+      onChanged: (value) {
+        setState(() {
+          searchQuery = value;
+          currentPage = 1;
+          applyFilters();
+        });
+      },
     );
 
-    // ============ Total + Reset ============
-    Widget totalAndReset() => Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          "Total: ${filteredPlans.length}",
-          style: const TextStyle(
-            fontWeight: FontWeight.w600,
-            color: Colors.grey,
-          ),
-        ),
-        const SizedBox(width: 8),
-        IconButton(
-          onPressed: resetFilters,
-          icon: const Icon(Icons.refresh),
-          color: Colors.red,
-          tooltip: "Reset",
-          padding: EdgeInsets.zero,
-          constraints:
-          const BoxConstraints(minWidth: 32, minHeight: 32),
-        ),
-      ],
+    final statusField = _buildDropdown<String>(
+      label: 'Status',
+      icon: Icons.toggle_on_outlined,
+      value: filterStatus,
+      items: _statusOptions,
+      onChanged: (v) {
+        if (v == null) return;
+        setState(() {
+          filterStatus = v;
+          currentPage = 1;
+          applyFilters();
+        });
+      },
     );
 
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+    final sortField = _buildDropdown<String>(
+      label: 'Sort by',
+      icon: Icons.sort_rounded,
+      value: sortOption,
+      items: _sortOptions,
+      onChanged: (v) {
+        if (v == null) return;
+        setState(() {
+          sortOption = v;
+          currentPage = 1;
+          applyFilters();
+        });
+      },
+    );
+
+    final perPageField = _buildDropdown<int>(
+      label: 'Per page',
+      icon: Icons.grid_view_rounded,
+      value: itemsPerPage,
+      items: rowsPerPageOptions,
+      onChanged: changeItemsPerPage,
+    );
+
+    final clearButton = OutlinedButton.icon(
+      onPressed: _hasActiveFilters ? resetFilters : null,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: _kBody,
+        side: const BorderSide(color: _kBorder),
+        minimumSize: const Size(0, 48),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
-      child: isMobile
-          ? Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      icon: const Icon(Icons.filter_alt_off_outlined, size: 18),
+      label: const Text('Clear filters'),
+    );
+
+    Widget body;
+    if (isWide) {
+      body = Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Row 1: Dropdown + Search
+          Expanded(child: searchField),
+          const SizedBox(width: 12),
+          SizedBox(width: 160, child: statusField),
+          const SizedBox(width: 12),
+          SizedBox(width: 210, child: sortField),
+          const SizedBox(width: 12),
+          SizedBox(width: 130, child: perPageField),
+          const SizedBox(width: 12),
+          clearButton,
+        ],
+      );
+    } else if (isMobile) {
+      body = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          searchField,
+          const SizedBox(height: 12),
           Row(
             children: [
-              dropdownField(width: 120),
-              const SizedBox(width: 8),
-              Expanded(child: searchField()),
+              Expanded(child: statusField),
+              const SizedBox(width: 12),
+              Expanded(child: perPageField),
             ],
           ),
           const SizedBox(height: 12),
-
-          // Row 2: Export + Total + Reset
+          sortField,
+          const SizedBox(height: 12),
+          clearButton,
+        ],
+      );
+    } else {
+      body = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          searchField,
+          const SizedBox(height: 12),
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              _buildExportIcons(),
-              totalAndReset(),
+              Expanded(child: statusField),
+              const SizedBox(width: 12),
+              Expanded(flex: 2, child: sortField),
+              const SizedBox(width: 12),
+              Expanded(child: perPageField),
+              const SizedBox(width: 12),
+              clearButton,
             ],
           ),
         ],
-      )
-          : Row(
-        children: [
-          // 1. Dropdown
-          dropdownField(width: 150),
-          const SizedBox(width: 12),
+      );
+    }
 
-          // 2. Search bar (expanded)
-          Expanded(
-            flex: 3,
-            child: searchField(),
-          ),
-          const SizedBox(width: 12),
-
-          // 3. Export buttons
-          _buildExportIcons(),
-          const SizedBox(width: 12),
-
-          // 4. Total + Reset
-          totalAndReset(),
-        ],
-      ),
-    );
-  }
-
-  // ==================== TABLE ====================
-  Widget _buildTable() {
     return Container(
+      padding: EdgeInsets.all(isMobile ? 14 : 16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _kBorder),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withOpacity(0.03),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header
-          Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFFF1F5F9),
-              borderRadius:
-              const BorderRadius.vertical(top: Radius.circular(12)),
-              border: Border.all(color: Colors.grey.shade300),
-            ),
-            child: SingleChildScrollView(
-              controller: _headerHorizontalController,
-              scrollDirection: Axis.horizontal,
-              child: Table(
-                border: TableBorder(
-                  horizontalInside: BorderSide(color: Colors.grey.shade300),
-                  verticalInside: BorderSide(color: Colors.grey.shade300),
-                  top: BorderSide(color: Colors.grey.shade300),
-                  bottom: BorderSide(color: Colors.grey.shade300),
-                ),
-                columnWidths: columnWidths,
-                children: [
-                  TableRow(
-                    children: headerLabels
-                        .map((label) => _tableHeader(label))
-                        .toList(),
-                  ),
-                ],
-              ),
+      child: body,
+    );
+  }
+
+  // ==================== PLANS SECTION (CARDS) ====================
+  Widget _buildPlansSection(double contentWidth) {
+    final columns = _columnsFor(contentWidth);
+
+    if (_isLoading) {
+      return _PlanSkeletonRow(columns: columns);
+    }
+
+    if (_loadError != null && allPlans.isEmpty) {
+      return _StateCard(
+        icon: Icons.cloud_off_outlined,
+        iconColor: Theme.of(context).colorScheme.error,
+        title: 'Unable to load plans',
+        message: _loadError!,
+        action: OutlinedButton.icon(
+          onPressed: loadPlans,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: _kBrand,
+            side: const BorderSide(color: _kBorder),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+          icon: const Icon(Icons.refresh_rounded, size: 18),
+          label: const Text('Try again'),
+        ),
+      );
+    }
+
+    if (filteredPlans.isEmpty) {
+      final noData = allPlans.isEmpty;
+      return _StateCard(
+        icon: noData ? Icons.inventory_2_outlined : Icons.search_off_rounded,
+        iconColor: _kBrand,
+        title: 'No plans found',
+        message: noData
+            ? 'Create your first property subscription plan to get started.'
+            : 'No plans match your search or filters. Change the filters or clear them to see all plans.',
+        action: noData
+            ? FilledButton.icon(
+          onPressed: () => _openPlanFormDialog(),
+          style: FilledButton.styleFrom(
+            backgroundColor: _kBrand,
+            foregroundColor: Colors.white,
+            padding:
+            const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10)),
+          ),
+          icon: const Icon(Icons.add_rounded, size: 18),
+          label: const Text('Create Plan'),
+        )
+            : OutlinedButton.icon(
+          onPressed: resetFilters,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: _kBody,
+            side: const BorderSide(color: _kBorder),
+            padding:
+            const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10)),
+          ),
+          icon: const Icon(Icons.filter_alt_off_outlined, size: 18),
+          label: const Text('Clear filters'),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildResultsBar(),
+        const SizedBox(height: 18),
+        _PlanCardsGrid(
+          plans: paginatedPlans,
+          columns: columns,
+          accentColors: _cardAccents,
+          icons: _cardIcons,
+          onView: showDetailsPopup,
+          onEdit: (plan) => _openPlanFormDialog(plan: plan),
+        ),
+        const SizedBox(height: 28),
+        _buildPagination(),
+      ],
+    );
+  }
+
+  Widget _buildResultsBar() {
+    return Row(
+      children: [
+        Text(
+          'All plans',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+            color: _kInk,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+          decoration: BoxDecoration(
+            color: _kBrand.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Text(
+            '${filteredPlans.length}',
+            style: const TextStyle(
+              color: Color(0xFF4338CA),
+              fontWeight: FontWeight.w700,
+              fontSize: 12.5,
             ),
           ),
-
-          // Body
-          Expanded(
-            child: filteredPlans.isEmpty
-                ? const Center(child: Text("No subscription plans found"))
-                : SingleChildScrollView(
-              controller: _verticalController,
-              child: SingleChildScrollView(
-                controller: _rowsHorizontalController,
-                scrollDirection: Axis.horizontal,
-                child: Table(
-                  border: TableBorder.all(
-                      color: Colors.grey.shade300, width: 1),
-                  columnWidths: columnWidths,
-                  children: List.generate(paginatedPlans.length, (rowIndex) {
-                    final plan = paginatedPlans[rowIndex];
-                    final isEven = rowIndex % 2 == 0;
-                    final srNo = filteredPlans.length -
-                        ((currentPage - 1) * itemsPerPage + rowIndex);
-
-                    return TableRow(
-                      decoration: BoxDecoration(
-                        color: isEven
-                            ? Colors.white
-                            : const Color(0xFFF8FAFC),
-                      ),
-                      children: [
-                        // SR No
-                        _tableCell(srNo.toString(),
-                            onTap: () => showDetailsPopup(plan)),
-
-                        // Plan Name
-                        _tableCell(plan.name,
-                            onTap: () => showDetailsPopup(plan),
-                            maxLines: 2),
-
-                        // Days
-                        Container(
-                          height: 42,
-                          padding: const EdgeInsets.all(4),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Colors.blue.withOpacity(0.15),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Center(
-                              child: Text(
-                                '${plan.days} days',
-                                style: TextStyle(
-                                  color: Colors.blue[700],
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-
-                        // Price
-                        Container(
-                          height: 42,
-                          padding: const EdgeInsets.all(4),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Colors.green.withOpacity(0.15),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Center(
-                              child: Text(
-                                formatPrice(plan.price),
-                                style: TextStyle(
-                                  color: Colors.green[700],
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-
-                        // Status
-                        Container(
-                          height: 42,
-                          padding: const EdgeInsets.all(4),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: plan.isActive
-                                  ? Colors.green.withOpacity(0.15)
-                                  : Colors.grey.withOpacity(0.15),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Center(
-                              child: Text(
-                                plan.isActive ? 'Active' : 'Inactive',
-                                style: TextStyle(
-                                  color: plan.isActive
-                                      ? Colors.green[700]
-                                      : Colors.grey[700],
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-
-                        // Created
-                        _tableCell(formatDate(plan.createdAt),
-                            onTap: () => showDetailsPopup(plan)),
-
-                        // Updated
-                        _tableCell(formatDate(plan.updatedAt),
-                            onTap: () => showDetailsPopup(plan)),
-
-                        // Action
-                        Container(
-                          height: 42,
-                          padding: const EdgeInsets.all(2),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              IconButton(
-                                icon: const Icon(Icons.visibility,
-                                    color: Color(0xFF4158D0), size: 18),
-                                onPressed: () => showDetailsPopup(plan),
-                                tooltip: 'View Details',
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(
-                                    minWidth: 28, minHeight: 28),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.edit,
-                                    color: Colors.orange, size: 18),
-                                onPressed: () => _showUpdateForm(plan),
-                                tooltip: 'Update Plan',
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(
-                                    minWidth: 28, minHeight: 28),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    );
-                  }),
-                ),
-              ),
+        ),
+        if (_hasActiveFilters) ...[
+          const SizedBox(width: 10),
+          Flexible(
+            child: Text(
+              'filtered from ${allPlans.length}',
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: _kMuted, fontSize: 13),
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _tableHeader(String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-      child: Text(
-        text,
-        textAlign: TextAlign.center,
-        style: const TextStyle(
-          fontWeight: FontWeight.bold,
-          fontSize: 11,
-          color: Color(0xFF1E293B),
-        ),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-    );
-  }
-
-  Widget _tableCell(String text, {VoidCallback? onTap, int maxLines = 2}) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 42,
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-        alignment: Alignment.center,
-        child: Text(
-          text,
-          textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 10),
-          maxLines: maxLines,
-          overflow: TextOverflow.ellipsis,
-        ),
-      ),
+      ],
     );
   }
 
   // ==================== PAGINATION ====================
   Widget _buildPagination() {
-    if (filteredPlans.isEmpty) return const SizedBox.shrink();
+    final total = filteredPlans.length;
+    final start = total == 0 ? 0 : (currentPage - 1) * itemsPerPage + 1;
+    final end = currentPage * itemsPerPage > total
+        ? total
+        : currentPage * itemsPerPage;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(10),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _kBorder),
       ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final showEntriesRow = Row(
-            mainAxisAlignment: MainAxisAlignment.start,
-            children: [
-              const Text("Show ", style: TextStyle(fontSize: 12)),
-              Container(
-                height: 32,
-                padding: const EdgeInsets.symmetric(horizontal: 6),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: Colors.grey.shade300),
-                ),
-                child: DropdownButton<int>(
-                  value: itemsPerPage,
-                  underline: const SizedBox(),
-                  icon: const Icon(Icons.arrow_drop_down, size: 18),
-                  style: const TextStyle(fontSize: 12),
-                  items: rowsPerPageOptions
-                      .map((e) =>
-                      DropdownMenuItem(value: e, child: Text(e.toString())))
-                      .toList(),
-                  onChanged: (v) {
-                    setState(() {
-                      itemsPerPage = v!;
-                      currentPage = 1;
-                      applyPagination();
-                    });
-                  },
-                ),
-              ),
-              const Text(" entries", style: TextStyle(fontSize: 12)),
-              const SizedBox(width: 12),
-              Text(
-                "Showing ${(currentPage - 1) * itemsPerPage + 1} to "
-                    "${currentPage * itemsPerPage > filteredPlans.length ? filteredPlans.length : currentPage * itemsPerPage} "
-                    "of ${filteredPlans.length}",
-                style: const TextStyle(fontSize: 11, color: Colors.grey),
-              ),
-            ],
-          );
-
-          final pageButtons = [
-            _compactPageButton(
-                icon: Icons.chevron_left,
-                onTap: currentPage > 1 ? previousPage : null),
-            if (totalPages <= 5)
-              ...List.generate(
-                  totalPages, (index) => _compactPageNumber(index + 1))
-            else if (currentPage <= 3) ...[
-              ...List.generate(4, (index) => _compactPageNumber(index + 1)),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 2),
-                child: Text("...",
-                    style: TextStyle(fontSize: 11, color: Colors.grey)),
-              ),
-              _compactPageNumber(totalPages),
-            ] else if (currentPage >= totalPages - 2) ...[
-              _compactPageNumber(1),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 2),
-                child: Text("...",
-                    style: TextStyle(fontSize: 11, color: Colors.grey)),
-              ),
-              ...List.generate(
-                  4, (index) => _compactPageNumber(totalPages - 3 + index)),
-            ] else ...[
-              _compactPageNumber(1),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 2),
-                child: Text("...",
-                    style: TextStyle(fontSize: 11, color: Colors.grey)),
-              ),
-              _compactPageNumber(currentPage - 1),
-              _compactPageNumber(currentPage),
-              _compactPageNumber(currentPage + 1),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 2),
-                child: Text("...",
-                    style: TextStyle(fontSize: 11, color: Colors.grey)),
-              ),
-              _compactPageNumber(totalPages),
-            ],
-            _compactPageButton(
-                icon: Icons.chevron_right,
-                onTap: currentPage < totalPages ? nextPage : null),
-          ];
-
-          final paginationRow = Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: pageButtons,
-          );
-
-          if (constraints.maxWidth < 700) {
-            return Column(
-              mainAxisSize: MainAxisSize.min,
+      child: Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 12,
+        runSpacing: 12,
+        children: [
+          Text.rich(
+            TextSpan(
               children: [
-                showEntriesRow,
-                const SizedBox(height: 8),
-                paginationRow,
+                const TextSpan(text: 'Showing '),
+                TextSpan(
+                  text: '$start–$end',
+                  style: const TextStyle(
+                      color: _kInk, fontWeight: FontWeight.w600),
+                ),
+                const TextSpan(text: ' of '),
+                TextSpan(
+                  text: '$total',
+                  style: const TextStyle(
+                      color: _kInk, fontWeight: FontWeight.w600),
+                ),
+                TextSpan(text: total == 1 ? ' plan' : ' plans'),
               ],
-            );
-          } else {
-            return SizedBox(
-              width: double.infinity,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  showEntriesRow,
-                  paginationRow,
-                ],
-              ),
-            );
-          }
-        },
+            ),
+            style: const TextStyle(fontSize: 13, color: _kMuted),
+          ),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _buildPageButtonPrevNext(prev: true),
+              ..._buildPageNumbers(),
+              _buildPageButtonPrevNext(prev: false),
+            ],
+          ),
+        ],
       ),
     );
   }
 
-  Widget _compactPageButton(
-      {required IconData icon, required VoidCallback? onTap}) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 2),
-      decoration: BoxDecoration(
-        border: Border.all(color: Colors.grey.shade300),
-        borderRadius: BorderRadius.circular(6),
-      ),
+  List<Widget> _buildPageNumbers() {
+    if (totalPages <= 5) {
+      return List.generate(totalPages, (index) => _buildPageButton(index + 1));
+    } else if (currentPage <= 3) {
+      return [
+        ...List.generate(4, (index) => _buildPageButton(index + 1)),
+        _buildEllipsis(),
+        _buildPageButton(totalPages),
+      ];
+    } else if (currentPage >= totalPages - 2) {
+      return [
+        _buildPageButton(1),
+        _buildEllipsis(),
+        ...List.generate(
+            4, (index) => _buildPageButton(totalPages - 3 + index)),
+      ];
+    } else {
+      return [
+        _buildPageButton(1),
+        _buildEllipsis(),
+        _buildPageButton(currentPage - 1),
+        _buildPageButton(currentPage),
+        _buildPageButton(currentPage + 1),
+        _buildEllipsis(),
+        _buildPageButton(totalPages),
+      ];
+    }
+  }
+
+  Widget _buildPageButtonPrevNext({required bool prev}) {
+    final enabled = prev ? currentPage > 1 : currentPage < totalPages;
+    return SizedBox(
+      width: 36,
+      height: 36,
       child: IconButton(
-        icon: Icon(icon, size: 16),
-        onPressed: onTap,
-        color: onTap != null ? const Color(0xFF6366F1) : Colors.grey,
+        tooltip: prev ? 'Previous page' : 'Next page',
+        icon: Icon(
+          prev ? Icons.chevron_left_rounded : Icons.chevron_right_rounded,
+          size: 20,
+        ),
+        onPressed: enabled ? (prev ? previousPage : nextPage) : null,
+        color: _kBrand,
+        disabledColor: _kFaint,
         padding: EdgeInsets.zero,
-        constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+        style: IconButton.styleFrom(
+          side: const BorderSide(color: _kBorder),
+          shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
       ),
     );
   }
 
-  Widget _compactPageNumber(int pageNum) {
-    final isSelected = currentPage == pageNum;
+  Widget _buildPageButton(int pageNum) {
+    final selected = currentPage == pageNum;
+    final shape =
+    RoundedRectangleBorder(borderRadius: BorderRadius.circular(8));
+    return SizedBox(
+      width: 36,
+      height: 36,
+      child: selected
+          ? FilledButton(
+        onPressed: () => goToPage(pageNum),
+        style: FilledButton.styleFrom(
+          backgroundColor: _kBrand,
+          foregroundColor: Colors.white,
+          padding: EdgeInsets.zero,
+          minimumSize: const Size(36, 36),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          shape: shape,
+        ),
+        child: Text(
+          '$pageNum',
+          style:
+          const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+        ),
+      )
+          : TextButton(
+        onPressed: () => goToPage(pageNum),
+        style: TextButton.styleFrom(
+          foregroundColor: _kInk,
+          padding: EdgeInsets.zero,
+          minimumSize: const Size(36, 36),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          shape: shape,
+        ),
+        child: Text(
+          '$pageNum',
+          style:
+          const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEllipsis() {
+    return const SizedBox(
+      width: 20,
+      height: 36,
+      child: Center(
+        child: Text(
+          '...',
+          style: TextStyle(fontSize: 13, color: _kMuted),
+        ),
+      ),
+    );
+  }
+}
+
+// ==================== STATUS BADGE ====================
+class _StatusBadge extends StatelessWidget {
+  final bool active;
+
+  const _StatusBadge({required this.active});
+
+  @override
+  Widget build(BuildContext context) {
+    final dot = active ? _kSuccess : _kFaint;
+    final text = active ? const Color(0xFF047857) : _kBody;
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: isSelected ? const Color(0xFF6366F1) : Colors.transparent,
+        color: (active ? _kSuccess : _kMuted).withOpacity(0.12),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            active ? 'Active' : 'Inactive',
+            style: TextStyle(
+              color: text,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ==================== EMPTY / ERROR STATE CARD ====================
+class _StateCard extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final String title;
+  final String message;
+  final Widget? action;
+
+  const _StateCard({
+    required this.icon,
+    required this.iconColor,
+    required this.title,
+    required this.message,
+    this.action,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 56),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _kBorder),
+      ),
+      child: Column(
+        children: [
+          Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              color: iconColor.withOpacity(0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, size: 34, color: iconColor),
+          ),
+          const SizedBox(height: 18),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: _kInk,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Text(
+              message,
+              textAlign: TextAlign.center,
+              style:
+              const TextStyle(color: _kMuted, fontSize: 13.5, height: 1.5),
+            ),
+          ),
+          if (action != null) ...[
+            const SizedBox(height: 22),
+            action!,
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ==================== LOADING SKELETON ====================
+class _PlanSkeletonRow extends StatefulWidget {
+  final int columns;
+
+  const _PlanSkeletonRow({required this.columns});
+
+  @override
+  State<_PlanSkeletonRow> createState() => _PlanSkeletonRowState();
+}
+
+class _PlanSkeletonRowState extends State<_PlanSkeletonRow>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1000),
+  )..repeat(reverse: true);
+
+  late final Animation<double> _opacity = Tween<double>(begin: 0.45, end: 1.0)
+      .animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Widget _bar({double? width, required double height}) {
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: _kBorder,
         borderRadius: BorderRadius.circular(6),
       ),
-      child: InkWell(
-        onTap: () => goToPage(pageNum),
-        borderRadius: BorderRadius.circular(6),
-        child: Container(
-          width: 28,
-          height: 28,
-          alignment: Alignment.center,
-          child: Text(
-            pageNum.toString(),
-            style: TextStyle(
-              color: isSelected ? Colors.white : const Color(0xFF1E293B),
-              fontWeight: FontWeight.w600,
-              fontSize: 11,
+    );
+  }
+
+  Widget _skeletonCard() {
+    return Container(
+      height: 380,
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: _kBorder),
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(44),
+          topRight: Radius.circular(6),
+          bottomLeft: Radius.circular(6),
+          bottomRight: Radius.circular(44),
+        ),
+      ),
+      child: Column(
+        children: [
+          Align(
+            alignment: Alignment.centerRight,
+            child: _bar(width: 60, height: 20),
+          ),
+          const SizedBox(height: 16),
+          _bar(width: 120, height: 38),
+          const SizedBox(height: 10),
+          _bar(width: 80, height: 10),
+          const SizedBox(height: 28),
+          _bar(height: 10),
+          const SizedBox(height: 18),
+          _bar(height: 10),
+          const SizedBox(height: 18),
+          _bar(height: 10),
+          const Spacer(),
+          Container(
+            width: 56,
+            height: 56,
+            decoration:
+            const BoxDecoration(color: _kBorder, shape: BoxShape.circle),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final children = <Widget>[];
+    for (var i = 0; i < widget.columns; i++) {
+      if (i > 0) children.add(const SizedBox(width: 20));
+      children.add(Expanded(child: _skeletonCard()));
+    }
+    return FadeTransition(
+      opacity: _opacity,
+      child: Row(children: children),
+    );
+  }
+}
+
+// ==================== PLAN CARDS GRID (RESPONSIVE, EQUAL-HEIGHT ROWS) ====================
+class _PlanCardsGrid extends StatelessWidget {
+  final List<PropertySubscriptionData> plans;
+  final int columns;
+  final List<Color> accentColors;
+  final List<IconData> icons;
+  final void Function(PropertySubscriptionData plan, Color accent, IconData icon)
+  onView;
+  final void Function(PropertySubscriptionData plan) onEdit;
+
+  const _PlanCardsGrid({
+    required this.plans,
+    required this.columns,
+    required this.accentColors,
+    required this.icons,
+    required this.onView,
+    required this.onEdit,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    const spacing = 22.0;
+    final rows = <Widget>[];
+
+    for (var start = 0; start < plans.length; start += columns) {
+      final rowChildren = <Widget>[];
+      for (var c = 0; c < columns; c++) {
+        if (c > 0) rowChildren.add(const SizedBox(width: spacing));
+        final index = start + c;
+        if (index < plans.length) {
+          final plan = plans[index];
+          // Keep accent stable per plan id for a consistent identity.
+          final accentIndex = plan.id.abs() % accentColors.length;
+          final accent = accentColors[accentIndex];
+          final icon = icons[accentIndex % icons.length];
+          rowChildren.add(
+            Expanded(
+              child: _PremiumPlanCard(
+                plan: plan,
+                accent: accent,
+                icon: icon,
+                onView: () => onView(plan, accent, icon),
+                onEdit: () => onEdit(plan),
+              ),
+            ),
+          );
+        } else {
+          rowChildren.add(const Expanded(child: SizedBox.shrink()));
+        }
+      }
+      if (rows.isNotEmpty) rows.add(const SizedBox(height: spacing));
+      rows.add(
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: rowChildren,
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: rows,
+    );
+  }
+}
+
+// ==================== PREMIUM PLAN CARD ====================
+class _PremiumPlanCard extends StatefulWidget {
+  final PropertySubscriptionData plan;
+  final Color accent;
+  final IconData icon;
+  final VoidCallback onView;
+  final VoidCallback onEdit;
+
+  const _PremiumPlanCard({
+    required this.plan,
+    required this.accent,
+    required this.icon,
+    required this.onView,
+    required this.onEdit,
+  });
+
+  @override
+  State<_PremiumPlanCard> createState() => _PremiumPlanCardState();
+}
+
+class _PremiumPlanCardState extends State<_PremiumPlanCard> {
+  bool _hovering = false;
+
+  static const BorderRadius _outerRadius = BorderRadius.only(
+    topLeft: Radius.circular(44),
+    topRight: Radius.circular(6),
+    bottomLeft: Radius.circular(6),
+    bottomRight: Radius.circular(44),
+  );
+
+  static const BorderRadius _innerRadius = BorderRadius.only(
+    topLeft: Radius.circular(34),
+    topRight: Radius.circular(4),
+    bottomLeft: Radius.circular(4),
+    bottomRight: Radius.circular(34),
+  );
+
+  Widget _featureLine(String text, {bool muted = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 9),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 1),
+            child: Icon(Icons.check_rounded, size: 16, color: widget.accent),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.4,
+                color: muted ? _kFaint : _kBody,
+                fontStyle: muted ? FontStyle.italic : FontStyle.normal,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _dashedDivider() {
+    return const SizedBox(
+      height: 1,
+      width: double.infinity,
+      child: CustomPaint(painter: _DashedLinePainter(Color(0xFFCBD5E1))),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final plan = widget.plan;
+    final accent = widget.accent;
+    final ring = Color.lerp(accent, Colors.black, 0.25)!;
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovering = true),
+      onExit: (_) => setState(() => _hovering = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        transform: Matrix4.translationValues(0, _hovering ? -4 : 0, 0),
+        decoration: BoxDecoration(
+          borderRadius: _outerRadius,
+          boxShadow: [
+            BoxShadow(
+              color: accent.withOpacity(_hovering ? 0.30 : 0.16),
+              blurRadius: _hovering ? 28 : 16,
+              offset: Offset(0, _hovering ? 14 : 8),
+            ),
+          ],
+        ),
+        child: Material(
+          color: accent,
+          borderRadius: _outerRadius,
+          clipBehavior: Clip.antiAlias,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 4, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Inner white panel
+                Expanded(
+                  child: Container(
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: _innerRadius,
+                    ),
+                    padding: const EdgeInsets.fromLTRB(22, 18, 22, 24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: _StatusBadge(active: plan.isActive),
+                        ),
+                        const SizedBox(height: 10),
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            _formatPrice(plan.price),
+                            maxLines: 1,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 34,
+                              height: 1.0,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -1,
+                              color: accent,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'for ${plan.days} ${plan.days == 1 ? 'day' : 'days'}',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(fontSize: 12, color: _kMuted),
+                        ),
+                        const SizedBox(height: 16),
+                        _dashedDivider(),
+                        _featureLine(_validityLabel(plan.days)),
+                        _dashedDivider(),
+                        _featureLine('Created ${_formatDate(plan.createdAt)}'),
+                        _dashedDivider(),
+                        _featureLine('Updated ${_formatDate(plan.updatedAt)}'),
+                        _dashedDivider(),
+                        const Spacer(),
+                        const SizedBox(height: 20),
+                        Center(
+                          child: AnimatedScale(
+                            scale: _hovering ? 1.06 : 1.0,
+                            duration: const Duration(milliseconds: 180),
+                            child: Container(
+                              width: 60,
+                              height: 60,
+                              decoration: BoxDecoration(
+                                color: accent,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: ring, width: 4),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: accent.withOpacity(0.3),
+                                    blurRadius: 12,
+                                    offset: const Offset(0, 4),
+                                  ),
+                                ],
+                              ),
+                              child: Icon(widget.icon,
+                                  color: Colors.white, size: 26),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // Footer: name tab + edit / details actions
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 12, 26, 12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 7),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              plan.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: accent,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 15,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        tooltip: 'Edit plan',
+                        onPressed: widget.onEdit,
+                        color: Colors.white,
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.edit_outlined, size: 18),
+                      ),
+                      Tooltip(
+                        message: 'View plan details',
+                        child: TextButton.icon(
+                          onPressed: widget.onView,
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 8),
+                            visualDensity: VisualDensity.compact,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
+                          ),
+                          icon: const Icon(Icons.visibility_outlined, size: 18),
+                          label: const Text(
+                            'Details',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
         ),
       ),
     );
   }
+}
 
-  // ==================== MAIN BUILD ====================
+// ==================== DASHED DIVIDER PAINTER ====================
+class _DashedLinePainter extends CustomPainter {
+  final Color color;
+
+  const _DashedLinePainter(this.color);
+
   @override
-  Widget build(BuildContext context) {
-    final isMobile = MediaQuery.of(context).size.width < 600;
-
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        centerTitle: false,
-        automaticallyImplyLeading: false,
-        title: Row(
-          children: [
-            const Text(
-              "Property Subscription Plans",
-              style: TextStyle(
-                color: Color(0xFF1E293B),
-                fontWeight: FontWeight.bold,
-                fontSize: 22,
-              ),
-            ),
-            const Spacer(),
-            if (!isMobile) _buildAnimatedCreateButton(),
-          ],
-        ),
-      ),
-      body: isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          children: [
-            if (isMobile) ...[
-              Align(
-                alignment: Alignment.centerRight,
-                child: _buildAnimatedCreateButton(),
-              ),
-              const SizedBox(height: 8),
-            ],
-            _buildFilterSection(isMobile),
-            const SizedBox(height: 8),
-            Expanded(
-              child: Column(
-                children: [
-                  Expanded(child: _buildTable()),
-                  const SizedBox(height: 8),
-                  _buildPagination(),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1;
+    const dash = 4.0;
+    const gap = 3.0;
+    final y = size.height / 2;
+    double x = 0;
+    while (x < size.width) {
+      final endX = (x + dash) > size.width ? size.width : x + dash;
+      canvas.drawLine(Offset(x, y), Offset(endX, y), paint);
+      x += dash + gap;
+    }
   }
+
+  @override
+  bool shouldRepaint(covariant _DashedLinePainter oldDelegate) =>
+      oldDelegate.color != color;
 }

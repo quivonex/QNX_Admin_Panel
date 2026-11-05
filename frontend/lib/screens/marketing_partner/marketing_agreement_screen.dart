@@ -1,12 +1,19 @@
 // lib/screens/marketing_partner/marketing_agreement_screen.dart
 
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+import 'dart:ui' show RenderRepaintBoundary;
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import '../../api/api_service.dart';
-import '../../models/marketing_partner/marketing_agreement_model.dart';
+import 'package:flutter/rendering.dart';
+import 'package:intl/intl.dart';
+import 'package:printing/printing.dart';
 import 'package:url_launcher/url_launcher.dart';
-import '../qnx_admin/agreement_screen.dart';
+import '../../api/marketing_service.dart';
+import '../../models/marketing_partner/marketing_agreement_model.dart';
 
+// ============================================================
+// ✅ MARKETING PARTNER AGREEMENT SCREEN
+// ============================================================
 class MarketingAgreementScreen extends StatefulWidget {
   const MarketingAgreementScreen({super.key});
 
@@ -16,16 +23,7 @@ class MarketingAgreementScreen extends StatefulWidget {
 }
 
 class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
-  // ============================================================
-  // STATE
-  // ============================================================
-  List<MarketingPartnerAgreementData> _agreements = [];
-  bool _isLoading = true;
-  String? _errorMessage;
-  bool _isMarketingPartner = false;
-  String _userRole = '';
-
-  // Design Palette (QNX Admin सारखेच)
+  // Colors
   static const Color primaryColor = Color(0xFFFF6584);
   static const Color secondaryColor = Color(0xFF9B59B6);
   static const Color bgColor = Color(0xFFF5F7FA);
@@ -34,19 +32,21 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
   static const Color textMuted = Color(0xFF64748B);
   static const Color borderColor = Color(0xFFE2E8F0);
 
+  List<MarketingPartnerAgreementData> _agreements = [];
+  bool _isLoading = true;
+  String? _errorMessage;
+
   @override
   void initState() {
     super.initState();
     _loadMyAgreements();
-    _checkUserRole();  //
   }
 
   // ============================================================
-  // ✅ LOAD MY AGREEMENTS (Only logged-in Marketing Partner)
+  // LOAD
   // ============================================================
   Future<void> _loadMyAgreements() async {
     if (!mounted) return;
-
     setState(() {
       _isLoading = true;
       _errorMessage = null;
@@ -54,7 +54,7 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
 
     try {
       final response =
-      await AgreementService.fetchMyMarketingPartnerAgreements();
+      await MarketingPartnerAgreementService.fetchMyAgreements();
 
       if (!mounted) return;
 
@@ -63,7 +63,6 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
           _agreements = response.data;
           _isLoading = false;
         });
-        print('✅ Loaded ${_agreements.length} agreements');
       } else {
         setState(() {
           _errorMessage = response.message;
@@ -79,87 +78,6 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
     }
   }
 
-  Future<void> _checkUserRole() async {
-    final prefs = await SharedPreferences.getInstance();
-    final role = prefs.getString('user_role') ?? '';
-    final roleLower = role.toLowerCase();
-
-    setState(() {
-      _userRole = role;
-      _isMarketingPartner = roleLower.contains('marketing partner') ||
-          roleLower.contains('marketing_partner');
-    });
-
-    print('🔍 User Role: "$role"');
-    print('🔍 Is Marketing Partner: $_isMarketingPartner');
-  }
-
-  // ============================================================
-  // ✅ OPEN CREATE AGREEMENT DIALOG (QNX Admin चा same form)
-  // ============================================================
-  void _openCreateAgreementDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-        child: Container(
-          width: double.infinity,
-          constraints: BoxConstraints(
-            maxWidth: 1200,
-            maxHeight: MediaQuery.of(context).size.height * 0.85,
-          ),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(28),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(28),
-            // ✅ QNX Admin चा Marketing Partner Agreement Form (Public class)
-            child: MarketingPartnerAgreementFormContent(
-              onClose: () {
-                if (mounted) Navigator.of(ctx).pop();
-                // ✅ Form close झाल्यावर list refresh करा
-                _loadMyAgreements();
-              },
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ============================================================
-  // ✅ OPEN DETAIL VIEW
-  // ============================================================
-  void _openAgreementDetail(MarketingPartnerAgreementData agreement) {
-    showDialog(
-      context: context,
-      builder: (ctx) => Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: const EdgeInsets.all(16),
-        child: Container(
-          constraints: BoxConstraints(
-            maxWidth: 900,
-            maxHeight: MediaQuery.of(context).size.height * 0.9,
-          ),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(24),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(24),
-            child: _AgreementDetailView(
-              agreement: agreement,
-              onClose: () => Navigator.of(ctx).pop(),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   // ============================================================
   // BUILD
   // ============================================================
@@ -171,10 +89,7 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
       backgroundColor: bgColor,
       body: Column(
         children: [
-          // -------------------- HEADER --------------------
           _buildHeader(isMobile),
-
-          // -------------------- CONTENT --------------------
           Expanded(
             child: _isLoading
                 ? const Center(
@@ -192,7 +107,7 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
   }
 
   // ============================================================
-  // ✅ HEADER
+  // HEADER
   // ============================================================
   Widget _buildHeader(bool isMobile) {
     return Container(
@@ -253,28 +168,10 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
               ],
             ),
           ),
-          ElevatedButton.icon(
-            onPressed: _openCreateAgreementDialog,
-            icon: const Icon(Icons.add_circle_outline, size: 18),
-            label: Text(
-              isMobile ? 'New' : 'Create Agreement',
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.white,
-              foregroundColor: primaryColor,
-              padding: EdgeInsets.symmetric(
-                horizontal: isMobile ? 12 : 16,
-                vertical: 10,
-              ),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
-              elevation: 0,
-            ),
+          IconButton(
+            onPressed: _loadMyAgreements,
+            icon: const Icon(Icons.refresh_rounded, color: Colors.white),
+            tooltip: 'Refresh',
           ),
         ],
       ),
@@ -282,7 +179,7 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
   }
 
   // ============================================================
-  // ✅ AGREEMENTS LIST
+  // LIST
   // ============================================================
   Widget _buildAgreementsList(bool isMobile) {
     return RefreshIndicator(
@@ -301,7 +198,7 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
   }
 
   // ============================================================
-  // ✅ AGREEMENT CARD
+  // AGREEMENT CARD
   // ============================================================
   Widget _buildAgreementCard(
       MarketingPartnerAgreementData agreement, bool isMobile) {
@@ -330,10 +227,9 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Row 1: Icon + Name + Status Badge
+              // Row 1: Avatar + Name + Status
               Row(
                 children: [
-                  // Avatar
                   Container(
                     width: 44,
                     height: 44,
@@ -359,14 +255,13 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
                     ),
                   ),
                   const SizedBox(width: 12),
-
-                  // Name + Agreement Number
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          agreement.marketingPartnerName ?? 'Marketing Partner',
+                          agreement.marketingPartnerName ??
+                              'Marketing Partner',
                           style: const TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.bold,
@@ -388,8 +283,6 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
                       ],
                     ),
                   ),
-
-                  // Status Badge
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 10,
@@ -427,7 +320,7 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
               const Divider(height: 1, color: borderColor),
               const SizedBox(height: 12),
 
-              // Row 2: Dates + Commission
+              // Row 2: Info chips
               Wrap(
                 spacing: 12,
                 runSpacing: 8,
@@ -467,9 +360,7 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
                 children: [
                   if (agreement.hasPdf)
                     TextButton.icon(
-                      onPressed: () {
-                        // PDF open logic (optional)
-                      },
+                      onPressed: () => _openPdf(agreement.pdfUrl),
                       icon: const Icon(
                         Icons.picture_as_pdf,
                         size: 16,
@@ -510,9 +401,6 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
     );
   }
 
-  // ============================================================
-  // ✅ SMALL INFO CHIP
-  // ============================================================
   Widget _buildInfoChip(
       IconData icon, String label, String value, Color color) {
     return Container(
@@ -549,7 +437,7 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
   }
 
   // ============================================================
-  // ✅ EMPTY STATE
+  // EMPTY / ERROR
   // ============================================================
   Widget _buildEmptyState() {
     return Center(
@@ -581,32 +469,9 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
             ),
             const SizedBox(height: 8),
             const Text(
-              'Create your first agreement to get started',
+              'Your agreements will appear here\nonce created by admin',
               style: TextStyle(fontSize: 13, color: textMuted),
               textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: _openCreateAgreementDialog,
-              icon: const Icon(Icons.add_circle_outline),
-              label: const Text(
-                'Create Agreement',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: primaryColor,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 14,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
             ),
           ],
         ),
@@ -614,9 +479,6 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
     );
   }
 
-  // ============================================================
-  // ✅ ERROR STATE
-  // ============================================================
   Widget _buildErrorState() {
     return Center(
       child: Padding(
@@ -656,17 +518,47 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
   }
 
   // ============================================================
-  // ✅ HELPERS
+  // DETAIL VIEW
+  // ============================================================
+  void _openAgreementDetail(MarketingPartnerAgreementData agreement) {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(16),
+        child: Container(
+          constraints: BoxConstraints(
+            maxWidth: 900,
+            maxHeight: MediaQuery.of(context).size.height * 0.9,
+          ),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(24),
+            child: _AgreementDetailView(
+              agreement: agreement,
+              onClose: () => Navigator.of(ctx).pop(),
+              onRefresh: () {
+                Navigator.of(ctx).pop();
+                _loadMyAgreements();
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ============================================================
+  // HELPERS
   // ============================================================
   String _formatDate(String? raw) {
     if (raw == null || raw.isEmpty) return '-';
     try {
       final date = DateTime.parse(raw);
-      final months = [
-        'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-      ];
-      return '${date.day} ${months[date.month - 1]} ${date.year}';
+      return DateFormat('dd MMM yyyy').format(date);
     } catch (_) {
       return raw;
     }
@@ -695,364 +587,611 @@ class _MarketingAgreementScreenState extends State<MarketingAgreementScreen> {
         return Icons.pending_rounded;
     }
   }
+
+  Future<void> _openPdf(String? url) async {
+    if (url == null || url.isEmpty) return;
+    try {
+      final uri = Uri.parse(url);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
 }
 
 // ============================================================
-// ✅ AGREEMENT DETAIL VIEW (Bottom Sheet / Dialog)
+// ✅ DETAIL VIEW
 // ============================================================
-class _AgreementDetailView extends StatelessWidget {
+class _AgreementDetailView extends StatefulWidget {
   final MarketingPartnerAgreementData agreement;
   final VoidCallback onClose;
+  final VoidCallback onRefresh;
 
   const _AgreementDetailView({
     required this.agreement,
     required this.onClose,
+    required this.onRefresh,
   });
 
+  @override
+  State<_AgreementDetailView> createState() => _AgreementDetailViewState();
+}
+
+class _AgreementDetailViewState extends State<_AgreementDetailView> {
   static const Color primaryColor = Color(0xFFFF6584);
   static const Color textMain = Color(0xFF0F172A);
   static const Color textMuted = Color(0xFF64748B);
   static const Color borderColor = Color(0xFFE2E8F0);
   static const Color cardBg = Colors.white;
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: const Color(0xFFF8FAFC),
-      child: Column(
-        children: [
-          // Header
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-            decoration: const BoxDecoration(
-              color: cardBg,
-              border: Border(
-                bottom: BorderSide(color: borderColor),
-              ),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: primaryColor.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(
-                    Icons.description_rounded,
-                    color: primaryColor,
-                    size: 20,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        agreement.marketingPartnerName ?? 'Agreement',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: textMain,
-                        ),
-                      ),
-                      Text(
-                        agreement.agreementNumber,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: textMuted,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  onPressed: onClose,
-                  icon: const Icon(Icons.close_rounded),
-                  color: Colors.redAccent,
-                ),
-              ],
-            ),
+  bool _isProcessing = false;
+
+  MarketingPartnerAgreementData get agreement => widget.agreement;
+
+  // ============================================================
+  // SIGN AGREEMENT
+  // ============================================================
+  Future<void> _signAgreement() async {
+    final signature = await showDialog<Uint8List>(
+      context: context,
+      builder: (_) => const _SignatureDialog(),
+    );
+
+    if (signature == null) return;
+    if (!mounted) return;
+
+    setState(() => _isProcessing = true);
+
+    try {
+      final response =
+      await MarketingPartnerAgreementService.partnerSignAgreement(
+        agreementId: agreement.agreementId,
+        signatureBytes: signature,
+      );
+
+      setState(() => _isProcessing = false);
+
+      if (!mounted) return;
+
+      if (response != null && response.success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(response.message),
+            backgroundColor: Colors.green,
           ),
+        );
+        widget.onRefresh();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(response?.message ?? 'Failed to sign'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => _isProcessing = false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
 
-          // Body
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Basic Info
-                  _section('Basic Information', Icons.info_rounded),
-                  const SizedBox(height: 10),
-                  _row('Agreement Number', agreement.agreementNumber),
-                  _row(
-                      'Start Date', _formatDate(agreement.agreementStartDate)),
-                  _row('End Date', _formatDate(agreement.agreementEndDate)),
-                  _row('Status', agreement.status.toUpperCase()),
+  // ============================================================
+  // REJECT AGREEMENT
+  // ============================================================
+  Future<void> _rejectAgreement() async {
+    final reason = await _showRejectDialog();
+    if (reason == null || reason.isEmpty) return;
+    if (!mounted) return;
 
-                  const SizedBox(height: 20),
+    setState(() => _isProcessing = true);
 
-                  // Partner Details
-                  _section('Partner Details', Icons.person_rounded),
-                  const SizedBox(height: 10),
-                  _row('Partner Name',
-                      agreement.marketingPartnerName ?? '-'),
-                  _row('Address', agreement.marketingPartnerAddress ?? '-'),
-                  _row('Aadhar Number', agreement.adharNumber ?? '-'),
-                  _row('PAN Number', agreement.panNumber ?? '-'),
+    try {
+      final response =
+      await MarketingPartnerAgreementService.partnerRejectAgreement(
+        agreementId: agreement.agreementId,
+        rejectionReason: reason,
+      );
 
-                  const SizedBox(height: 20),
+      setState(() => _isProcessing = false);
 
-                  // Commission
-                  _section('Commission & Profit', Icons.trending_up_rounded),
-                  const SizedBox(height: 10),
-                  _row('Company Commission',
-                      '${agreement.companyCommissionPercentage}%'),
-                  _row('Profit Share',
-                      '${agreement.profitSharePercentage}%'),
-                  _row('Selling Commission',
-                      '${agreement.sellingCommissionPercentage}%'),
+      if (!mounted) return;
 
-                  const SizedBox(height: 20),
+      if (response != null && response.success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(response.message),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        widget.onRefresh();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(response?.message ?? 'Failed to reject'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => _isProcessing = false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
 
-                  // Terms
-                  _section('Additional Terms', Icons.notes_rounded),
-                  const SizedBox(height: 10),
-                  _row('Additional Points',
-                      agreement.additionalPoints.isEmpty
-                          ? '-'
-                          : agreement.additionalPoints),
-                  _row('Representative',
-                      agreement.qnxMartRepresentative.isEmpty
-                          ? '-'
-                          : agreement.qnxMartRepresentative),
-                  if (agreement.remarks != null &&
-                      agreement.remarks!.isNotEmpty)
-                    _row('Remarks', agreement.remarks!),
+  // ============================================================
+  // DOWNLOAD PDF
+  // ============================================================
+  Future<void> _downloadPdf() async {
+    setState(() => _isProcessing = true);
 
-                  const SizedBox(height: 20),
+    try {
+      final bytes =
+      await MarketingPartnerAgreementService.downloadAgreementPdf(
+          agreement.agreementId);
 
-                  // ✅ SIGNATURES & PHOTOS SECTION
-                  // ✅ SIGNATURES & PHOTOS SECTION
-                  if (agreement.hasImages || agreement.hasPdf) ...[
-                    const SizedBox(height: 20),
-                    _section('Uploaded Documents', Icons.folder_rounded),
-                    const SizedBox(height: 10),
+      setState(() => _isProcessing = false);
 
-                    // ✅ PDF Document
-                    if (agreement.hasPdf) ...[
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.red.shade50,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.red.shade200),
-                        ),
-                        child: Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Icon(
-                                Icons.picture_as_pdf,
-                                color: Colors.red.shade600,
-                                size: 24,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            const Expanded(
-                              child: Text(
-                                'Agreement PDF Document',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 13,
-                                  color: textMain,
-                                ),
-                              ),
-                            ),
-                            ElevatedButton.icon(
-                              onPressed: () async {
-                                // ✅ Use the resolver, not the raw field
-                                final url = agreement.pdfUrl;
-                                if (url == null || url.isEmpty) {
-                                  print('❌ PDF URL is empty');
-                                  return;
-                                }
-                                final uri = Uri.parse(url);
-                                try {
-                                  if (await canLaunchUrl(uri)) {
-                                    await launchUrl(
-                                      uri,
-                                      mode: LaunchMode.externalApplication,
-                                    );
-                                  } else {
-                                    print('❌ Cannot launch URL: $url');
-                                  }
-                                } catch (e) {
-                                  print('❌ Error launching PDF: $e');
-                                }
-                              },
-                              icon: const Icon(Icons.open_in_new, size: 14),
-                              label: const Text('View',
-                                  style: TextStyle(fontSize: 11)),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.red.shade600,
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 6),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                    ],
+      if (!mounted) return;
 
-                    // ✅ Signatures & Photos Grid — uses resolvers now
-                    if (agreement.hasImages)
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        children: [
-                          if (agreement.qnxSignDisplayUrl != null)
-                            _buildImageTile(
-                              'QNX Mart Sign',
-                              agreement.qnxSignDisplayUrl!,
-                              Icons.draw_rounded,
-                              const Color(0xFF6C63FF),
-                            ),
-                          if (agreement.mpSignDisplayUrl != null)
-                            _buildImageTile(
-                              'Partner Sign',
-                              agreement.mpSignDisplayUrl!,
-                              Icons.draw_rounded,
-                              const Color(0xFFFF6584),
-                            ),
-                          if (agreement.qnxPictureDisplayUrl != null)
-                            _buildImageTile(
-                              'QNX Mart Photo',
-                              agreement.qnxPictureDisplayUrl!,
-                              Icons.person_rounded,
-                              const Color(0xFF10B981),
-                            ),
-                          if (agreement.mpPictureDisplayUrl != null)
-                            _buildImageTile(
-                              'Partner Photo',
-                              agreement.mpPictureDisplayUrl!,
-                              Icons.person_rounded,
-                              const Color(0xFFF59E0B),
-                            ),
-                        ],
-                      ),
-                  ],
+      if (bytes != null) {
+        await Printing.sharePdf(
+          bytes: bytes,
+          filename: '${agreement.agreementNumber}.pdf',
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to download PDF'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => _isProcessing = false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
 
-                  const SizedBox(height: 20),
+  // ============================================================
+  // REJECT DIALOG
+  // ============================================================
+  Future<String?> _showRejectDialog() async {
+    final formKey = GlobalKey<FormState>();
+    final ctrl = TextEditingController();
+    String? reason;
 
-                  // Rejection Reason
-                  if (agreement.rejectionReason != null &&
-                      agreement.rejectionReason!.isNotEmpty)
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.red.shade50,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: Colors.red.shade200),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Icon(Icons.warning_amber_rounded,
-                                  color: Colors.red.shade700, size: 18),
-                              const SizedBox(width: 6),
-                              Text(
-                                'Rejection Reason',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.red.shade700,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            agreement.rejectionReason!,
-                            style: TextStyle(color: Colors.red.shade900),
-                          ),
-                        ],
-                      ),
-                    ),
-                ],
-              ),
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('Reject Agreement'),
+          ],
+        ),
+        content: Form(
+          key: formKey,
+          child: TextFormField(
+            controller: ctrl,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              hintText: 'Enter rejection reason',
+              border: OutlineInputBorder(),
             ),
+            validator: (value) =>
+            value == null || value.isEmpty ? 'Reason is required' : null,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () {
+              if (!formKey.currentState!.validate()) return;
+              reason = ctrl.text.trim();
+              Navigator.of(dialogContext).pop();
+            },
+            child: const Text('Reject'),
           ),
         ],
       ),
     );
+    return reason;
   }
 
-  Widget _section(String title, IconData icon) {
-    return Row(
+  // ============================================================
+  // BUILD
+  // ============================================================
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
       children: [
         Container(
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: primaryColor.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
+          color: const Color(0xFFF8FAFC),
+          child: Column(
+            children: [
+              _buildHeader(),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Action buttons section
+                      if (agreement.canPartnerSign ||
+                          agreement.canPartnerReject ||
+                          agreement.canDownloadPdf)
+                        _buildActionSection(),
+
+                      const SizedBox(height: 16),
+                      _section('Basic Information', Icons.info_rounded),
+                      const SizedBox(height: 10),
+                      _row('Agreement Number', agreement.agreementNumber),
+                      _row('Start Date',
+                          _formatDate(agreement.agreementStartDate)),
+                      _row('End Date',
+                          _formatDate(agreement.agreementEndDate)),
+                      _row('Status', agreement.status.toUpperCase()),
+                      _row('Stage', agreement.agreementStage),
+                      if (agreement.partnerSignedAt != null)
+                        _row('Partner Signed',
+                            _formatDate(agreement.partnerSignedAt)),
+                      if (agreement.approvedAt != null)
+                        _row('Approved', _formatDate(agreement.approvedAt)),
+
+                      const SizedBox(height: 20),
+                      _section('Partner Details', Icons.person_rounded),
+                      const SizedBox(height: 10),
+                      _row('Partner Name',
+                          agreement.marketingPartnerName ?? '-'),
+                      _row('Address',
+                          agreement.marketingPartnerAddress ?? '-'),
+                      _row('Aadhar Number', agreement.adharNumber ?? '-'),
+                      _row('PAN Number', agreement.panNumber ?? '-'),
+
+                      const SizedBox(height: 20),
+                      _section('Commission & Profit',
+                          Icons.trending_up_rounded),
+                      const SizedBox(height: 10),
+                      _row('Company Commission',
+                          '${agreement.companyCommissionPercentage}%'),
+                      _row('Profit Share',
+                          '${agreement.profitSharePercentage}%'),
+                      _row('Selling Commission',
+                          '${agreement.sellingCommissionPercentage}%'),
+
+                      const SizedBox(height: 20),
+                      _section('Additional Terms', Icons.notes_rounded),
+                      const SizedBox(height: 10),
+                      _row(
+                          'Additional Points',
+                          agreement.additionalPoints.isEmpty
+                              ? '-'
+                              : agreement.additionalPoints),
+                      _row(
+                          'Representative',
+                          agreement.qnxMartRepresentative.isEmpty
+                              ? '-'
+                              : agreement.qnxMartRepresentative),
+                      if (agreement.remarks != null &&
+                          agreement.remarks!.isNotEmpty)
+                        _row('Remarks', agreement.remarks!),
+
+                      const SizedBox(height: 20),
+
+                      // Uploaded Documents
+                      if (agreement.hasImages || agreement.hasPdf) ...[
+                        _section('Uploaded Documents', Icons.folder_rounded),
+                        const SizedBox(height: 10),
+                        if (agreement.hasPdf) ...[
+                          _buildPdfTile(),
+                          const SizedBox(height: 14),
+                        ],
+                        if (agreement.hasImages)
+                          Wrap(
+                            spacing: 12,
+                            runSpacing: 12,
+                            children: [
+                              if (agreement.qnxSignDisplayUrl != null)
+                                _buildImageTile(
+                                  'QNX Mart Sign',
+                                  agreement.qnxSignDisplayUrl!,
+                                  Icons.draw_rounded,
+                                  const Color(0xFF6C63FF),
+                                ),
+                              if (agreement.mpSignDisplayUrl != null)
+                                _buildImageTile(
+                                  'Partner Sign',
+                                  agreement.mpSignDisplayUrl!,
+                                  Icons.draw_rounded,
+                                  const Color(0xFFFF6584),
+                                ),
+                              if (agreement.qnxPictureDisplayUrl != null)
+                                _buildImageTile(
+                                  'QNX Mart Photo',
+                                  agreement.qnxPictureDisplayUrl!,
+                                  Icons.person_rounded,
+                                  const Color(0xFF10B981),
+                                ),
+                              if (agreement.mpPictureDisplayUrl != null)
+                                _buildImageTile(
+                                  'Partner Photo',
+                                  agreement.mpPictureDisplayUrl!,
+                                  Icons.person_rounded,
+                                  const Color(0xFFF59E0B),
+                                ),
+                            ],
+                          ),
+                      ],
+
+                      const SizedBox(height: 20),
+
+                      // Rejection reason
+                      if (agreement.rejectionReason != null &&
+                          agreement.rejectionReason!.isNotEmpty)
+                        _buildRejectionBox(),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
-          child: Icon(icon, size: 14, color: primaryColor),
         ),
-        const SizedBox(width: 8),
-        Text(
-          title,
-          style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.bold,
-            color: textMain,
+
+        // Processing overlay
+        if (_isProcessing)
+          Container(
+            color: Colors.black.withOpacity(0.3),
+            child: const Center(
+              child: CircularProgressIndicator(color: primaryColor),
+            ),
           ),
-        ),
       ],
     );
   }
 
-  Widget _row(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+  // ============================================================
+  // HEADER
+  // ============================================================
+  Widget _buildHeader() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [primaryColor, Color(0xFF9B59B6)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
       child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(
+              Icons.description_rounded,
+              color: Colors.white,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  agreement.marketingPartnerName ?? 'Agreement',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+                Text(
+                  agreement.agreementNumber,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.white.withOpacity(0.85),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: widget.onClose,
+            icon: const Icon(Icons.close_rounded, color: Colors.white),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ============================================================
+  // ACTION SECTION
+  // ============================================================
+  Widget _buildActionSection() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            primaryColor.withOpacity(0.08),
+            const Color(0xFF9B59B6).withOpacity(0.08),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: primaryColor.withOpacity(0.2)),
+      ),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            width: 140,
+          const Row(
+            children: [
+              Icon(Icons.touch_app_rounded, color: primaryColor, size: 18),
+              SizedBox(width: 8),
+              Text(
+                'Actions',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  color: primaryColor,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              // Sign button
+              if (agreement.canPartnerSign)
+                ElevatedButton.icon(
+                  onPressed: _isProcessing ? null : _signAgreement,
+                  icon: const Icon(Icons.draw_rounded, size: 18),
+                  label: const Text('Sign Agreement'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+
+              // Reject button
+              if (agreement.canPartnerReject)
+                ElevatedButton.icon(
+                  onPressed: _isProcessing ? null : _rejectAgreement,
+                  icon: const Icon(Icons.cancel_rounded, size: 18),
+                  label: const Text('Reject Agreement'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+
+              // Download PDF (only approved)
+              if (agreement.canDownloadPdf)
+                ElevatedButton.icon(
+                  onPressed: _isProcessing ? null : _downloadPdf,
+                  icon: const Icon(Icons.download_rounded, size: 18),
+                  label: const Text('Download PDF'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ============================================================
+  // PDF TILE
+  // ============================================================
+  Widget _buildPdfTile() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.red.shade50,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.red.shade200),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(
+              Icons.picture_as_pdf,
+              color: Colors.red.shade600,
+              size: 24,
+            ),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
             child: Text(
-              label,
-              style: const TextStyle(
-                fontSize: 12,
+              'Agreement PDF Document',
+              style: TextStyle(
                 fontWeight: FontWeight.w600,
-                color: textMuted,
+                fontSize: 13,
+                color: textMain,
               ),
             ),
           ),
-          Expanded(
-            child: Text(
-              value,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: textMain,
-              ),
+          ElevatedButton.icon(
+            onPressed: () async {
+              final url = agreement.pdfUrl;
+              if (url == null || url.isEmpty) return;
+              try {
+                final uri = Uri.parse(url);
+                if (await canLaunchUrl(uri)) {
+                  await launchUrl(uri, mode: LaunchMode.externalApplication);
+                }
+              } catch (e) {
+                print('Error: $e');
+              }
+            },
+            icon: const Icon(Icons.open_in_new, size: 14),
+            label: const Text('View', style: TextStyle(fontSize: 11)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red.shade600,
+              foregroundColor: Colors.white,
+              padding:
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             ),
           ),
         ],
       ),
     );
   }
-  // ✅ Image tile (Signatures/Photos साठी)
+
+  // ============================================================
+  // IMAGE TILE
+  // ============================================================
   Widget _buildImageTile(
       String label, String imageUrl, IconData icon, Color color) {
     return Container(
@@ -1108,19 +1247,6 @@ class _AgreementDetailView extends StatelessWidget {
               child: Image.network(
                 imageUrl,
                 fit: BoxFit.cover,
-                loadingBuilder: (context, child, progress) {
-                  if (progress == null) return child;
-                  return Center(
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: color,
-                      value: progress.expectedTotalBytes != null
-                          ? progress.cumulativeBytesLoaded /
-                          progress.expectedTotalBytes!
-                          : null,
-                    ),
-                  );
-                },
                 errorBuilder: (_, __, ___) => Center(
                   child: Icon(
                     Icons.broken_image_outlined,
@@ -1136,17 +1262,276 @@ class _AgreementDetailView extends StatelessWidget {
     );
   }
 
+  // ============================================================
+  // REJECTION BOX
+  // ============================================================
+  Widget _buildRejectionBox() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.red.shade50,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.red.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.warning_amber_rounded,
+                  color: Colors.red.shade700, size: 18),
+              const SizedBox(width: 6),
+              Text(
+                'Rejection Reason',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.red.shade700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            agreement.rejectionReason!,
+            style: TextStyle(color: Colors.red.shade900),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ============================================================
+  // HELPERS
+  // ============================================================
+  Widget _section(String title, IconData icon) {
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: primaryColor.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(icon, size: 14, color: primaryColor),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+            color: textMain,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _row(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 140,
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: textMuted,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: textMain,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   String _formatDate(String? raw) {
     if (raw == null || raw.isEmpty) return '-';
     try {
       final date = DateTime.parse(raw);
-      final months = [
-        'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-      ];
-      return '${date.day} ${months[date.month - 1]} ${date.year}';
+      return DateFormat('dd MMM yyyy').format(date);
     } catch (_) {
       return raw;
     }
+  }
+}
+
+// ============================================================
+// ✅ SIGNATURE DIALOG
+// ============================================================
+class _SignaturePainter extends CustomPainter {
+  final List<List<Offset>> strokes;
+  _SignaturePainter(this.strokes);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.black
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+    for (final stroke in strokes) {
+      for (int i = 0; i < stroke.length - 1; i++) {
+        canvas.drawLine(stroke[i], stroke[i + 1], paint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _SignaturePainter oldDelegate) => true;
+}
+
+class _SignatureDialog extends StatefulWidget {
+  const _SignatureDialog();
+
+  @override
+  State<_SignatureDialog> createState() => _SignatureDialogState();
+}
+
+class _SignatureDialogState extends State<_SignatureDialog> {
+  final List<List<Offset>> _strokes = [];
+  final GlobalKey _boundaryKey = GlobalKey();
+
+  void _clear() {
+    setState(() => _strokes.clear());
+  }
+
+  Future<void> _save() async {
+    if (_strokes.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please draw your signature first'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    try {
+      final boundary = _boundaryKey.currentContext!.findRenderObject()
+      as RenderRepaintBoundary;
+      final image = await boundary.toImage(pixelRatio: 3.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      final bytes = byteData!.buffer.asUint8List();
+      if (mounted) Navigator.of(context).pop(bytes);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Container(
+        width: 400,
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.draw_rounded, color: Color(0xFFFF6584)),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Sign Agreement',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Draw your signature below',
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
+            const SizedBox(height: 12),
+            RepaintBoundary(
+              key: _boundaryKey,
+              child: Container(
+                width: double.infinity,
+                height: 220,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: Colors.grey.shade400, width: 2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: GestureDetector(
+                    onPanStart: (details) {
+                      setState(() {
+                        _strokes.add([details.localPosition]);
+                      });
+                    },
+                    onPanUpdate: (details) {
+                      setState(() {
+                        _strokes.last.add(details.localPosition);
+                      });
+                    },
+                    child: CustomPaint(
+                      painter: _SignaturePainter(_strokes),
+                      size: Size.infinite,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _clear,
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text('Clear'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _save,
+                    icon: const Icon(Icons.check_rounded),
+                    label: const Text('Save'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFFF6584),
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

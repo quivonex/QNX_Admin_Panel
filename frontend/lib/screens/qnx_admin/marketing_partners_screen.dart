@@ -10,6 +10,9 @@ import '../../api/api_response.dart';
 import '../../api/api_service.dart';
 import '../../models/qnx_admin/marketing_partner_model.dart';
 import '../../models/qnx_admin/marketing_head_model.dart';
+import '../marketing_partner/partner_bank_details_screen.dart';
+import 'approved_marketing_partners_screen.dart';
+import 'bank_details_screen.dart';
 import 'partner_companies_screen.dart';
 
 class MarketingPartnersScreen extends StatefulWidget {
@@ -575,7 +578,7 @@ class _MarketingPartnersScreenState extends State<MarketingPartnersScreen> {
     );
   }
 
-  Widget _buildBankDetailsSection(int partnerId) {
+  Widget _buildBankDetailsSection(int partnerId, String partnerName) {
     return FutureBuilder<BankDetailResponse>(
       future: BankDetailService.fetchBankDetails(partnerId),
       builder: (context, snapshot) {
@@ -588,7 +591,9 @@ class _MarketingPartnersScreenState extends State<MarketingPartnersScreen> {
             ],
           );
         }
-        if (snapshot.hasError || !snapshot.hasData || snapshot.data!.data.isEmpty) {
+        if (snapshot.hasError ||
+            !snapshot.hasData ||
+            snapshot.data!.data.isEmpty) {
           return _buildPremiumSection(
             title: 'Bank Details',
             icon: Icons.account_balance_wallet_rounded,
@@ -603,6 +608,37 @@ class _MarketingPartnersScreenState extends State<MarketingPartnersScreen> {
                   child: Text(
                     'No bank details added yet',
                     style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              // ✅ NEW: Add Bank Detail button opens the DIALOG
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () async {
+                    final result = await showDialog<bool>(
+                      context: context,
+                      barrierDismissible: false,
+                      builder: (_) => BankDetailsDialog(
+                        preselectedPartnerId: partnerId,
+                        preselectedPartnerName: partnerName,
+                      ),
+                    );
+                    if (result == true && context.mounted) {
+                      // Refresh the bank section
+                      (context as Element).markNeedsBuild();
+                    }
+                  },
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text("Add Bank Detail"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _premiumPrimary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                 ),
               ),
@@ -623,11 +659,42 @@ class _MarketingPartnersScreenState extends State<MarketingPartnersScreen> {
             if (bankDetail.upiId != null && bankDetail.upiId!.isNotEmpty)
               _infoRow("UPI ID", bankDetail.upiId!),
             _infoRow("Created At", bankDetail.createdAt.substring(0, 10)),
+            const SizedBox(height: 12),
+            // ✅ Update button also opens the dialog
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final result = await showDialog<bool>(
+                    context: context,
+                    barrierDismissible: false,
+                    builder: (_) => BankDetailsDialog(
+                      preselectedPartnerId: partnerId,
+                      preselectedPartnerName: partnerName,
+                    ),
+                  );
+                  if (result == true && context.mounted) {
+                    (context as Element).markNeedsBuild();
+                  }
+                },
+                icon: const Icon(Icons.edit, size: 18),
+                label: const Text("Add / Update Bank Detail"),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _premiumPrimary,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: const BorderSide(color: _premiumPrimary),
+                  ),
+                ),
+              ),
+            ),
           ],
         );
       },
     );
   }
+
 
   // ---------------------- APPROVE FLOW ----------------------
   void _showApproveFlow(MarketingPartner partner) async {
@@ -1117,6 +1184,8 @@ class _MarketingPartnersScreenState extends State<MarketingPartnersScreen> {
               _buildExportIcons(),
               Row(
                 children: [
+                  _buildApprovedPartnersButton(),
+                  const SizedBox(width: 8),
                   Text("Total: ${filteredPartners.length}"),
                   const SizedBox(width: 8),
                   IconButton(onPressed: resetFilters, icon: const Icon(Icons.refresh), color: Colors.red),
@@ -1134,13 +1203,57 @@ class _MarketingPartnersScreenState extends State<MarketingPartnersScreen> {
           const SizedBox(width: 12),
           _buildExportIcons(),
           const SizedBox(width: 12),
+          _buildApprovedPartnersButton(),
+          const SizedBox(width: 12),
           Text("Total: ${filteredPartners.length}"),
           IconButton(onPressed: resetFilters, icon: const Icon(Icons.refresh), color: Colors.red),
         ],
       ),
     );
   }
-
+  Widget _buildApprovedPartnersButton() {
+    return InkWell(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const ApprovedMarketingPartnersScreen(),
+          ),
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF4158D0), Color(0xFFC850C0)],
+          ),
+          borderRadius: BorderRadius.circular(10),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF4158D0).withOpacity(0.3),
+              blurRadius: 6,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(Icons.verified, size: 16, color: Colors.white),
+            SizedBox(width: 6),
+            Text(
+              "Approved Partners",
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
   Widget _buildFilterDropdown() {
     return Container(
       width: 120,
@@ -1550,7 +1663,7 @@ class _MarketingPartnersScreenState extends State<MarketingPartnersScreen> {
                               ],
                             ),
                             const SizedBox(height: 20),
-                            _buildBankDetailsSection(partner.id),
+                            _buildBankDetailsSection(partner.id, partner.fullName),
                             const SizedBox(height: 24),
                             ElevatedButton.icon(
                               onPressed: () {

@@ -9,7 +9,6 @@ import 'package:battery_regeneration_system/screens/qnx_admin/return_orders_scre
 
 import '../../screens/qnx_admin/return_orders_screen.dart';
 import 'package:battery_regeneration_system/screens/qnx_admin/pending_payment_requests_screen.dart';
-import 'package:battery_regeneration_system/screens/qnx_admin/update_amount_screen.dart';
 import 'package:battery_regeneration_system/screens/qnx_admin/user_list_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -478,13 +477,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
       ),
     );
   }
-  void _showUpdateAmountDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: true,
-      builder: (context) => const UpdateAmountScreen(),
-    );
-  }
+
   Future<void> _loadUserRole() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
@@ -843,9 +836,9 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
       case 'OLX Attribute':
         return (const OlxAttributeScreen(), Icons.list_alt);
       case 'OLX Plan':
-        return (const OlxPlanScreen(), Icons.card_membership);
-      case 'OLX Pricing':
-        return (const OlxPricingScreen(), Icons.attach_money);
+        return (const OlxPlansPricingScreen(), Icons.card_membership);
+/*      case 'OLX Pricing':
+        return (const OlxPricingScreen(), Icons.attach_money);*/
       case 'OLX Settings':
         return (const OlxSettingsScreen(), Icons.settings);
       case 'Real Estate Subscription':
@@ -858,6 +851,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
         return (const UpdateRequestListScreen(), Icons.update);
       case 'All Company':
         return (const CompanyAllScreen(), Icons.business);
+
       case 'Agreement':
         return (AgreementScreen(), Icons.description);
       case 'Franchise':
@@ -876,10 +870,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
         return (const MarketingPartnersScreen(), Icons.people_outline);
       case 'Admin Create':
         return (const AdminCreateScreen(), Icons.admin_panel_settings);
-      case 'Bank Details':
+     /* case 'Bank Details':
         return (const BankDetailsScreen(), Icons.account_balance_wallet_rounded);
       case 'Approved Marketing Partners':
-        return (const ApprovedMarketingPartnersScreen(), Icons.people_outline);
+        return (const ApprovedMarketingPartnersScreen(), Icons.people_outline);*/
       case 'Payment Request':
         return (const PendingPaymentRequestsScreen(), Icons.payments_outlined);
       case 'Property Enquiries':
@@ -888,8 +882,14 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
         return (const PropertyListScreen(), Icons.house);
       case 'Builders':
         return (const BuildersListScreen(), Icons.business_center);
+      case 'Banners':
+        return (const BannerManagementScreen(), Icons.image);
+    // ⚠️ जुना title पण ठेवा (backward compatibility)
       case 'Banner Management':
         return (const BannerManagementScreen(), Icons.image);
+
+      case 'Packing Material Enquiries':
+        return (const PackingMaterialEnquiryScreen(), Icons.inventory_2);
       case 'ShipRocket':
         return (const ShiprocketScreen(), Icons.local_shipping);
       case 'Shipments':
@@ -915,6 +915,19 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
       case 'Packing Material Enquiries':
         return (const PackingMaterialEnquiryScreen(), Icons.inventory_2);
       case 'Boosting Plans':
+        return (const BoostingPlanScreen(), Icons.rocket_launch_outlined);
+
+
+    // ✅ NEW: Subscription Plans master cases (हे missing आहेत!)
+      case 'Real Estate Property Plan':
+        return (const PropertySubscriptionScreen(), Icons.home_work_outlined);
+      case 'Real Estate Customer Plan':
+        return (const CustomerSubscriptionPlanScreen(), Icons.home_outlined);
+      case 'OLX Product Plan':
+        return (const OlxPlansPricingScreen(), Icons.storefront_outlined);
+      case 'OLX Chat Plan':
+        return (const OlxCommunicationPlanScreen(), Icons.forum_outlined);
+      case 'Boosting Plan':
         return (const BoostingPlanScreen(), Icons.rocket_launch_outlined);
       default:
         return (const DashboardHomeContent(), Icons.dashboard);
@@ -1786,19 +1799,30 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                             _openScreen('SubCategory', const SubCategoryAllScreen(), icon: Icons.subtitles);
                           },
                         ),
+
                         _buildDrawerItem(
-                          icon: Icons.card_membership,
-                          title: 'Real Estate Subscription',
+                          icon: Icons.image,
+                          title: 'Banners',
                           onTap: () {
                             Navigator.pop(context);
                             _openScreen(
-                              'Real Estate Subscription',
-                              const PropertySubscriptionScreen(),
-                              icon: Icons.card_membership,
+                              'Banners',
+                              const BannerManagementScreen(),
+                              icon: Icons.image,
                             );
                           },
-                          isSelected: _activeTab == 'Real Estate Subscription',
+                          isSelected: _activeTab == 'Banners',
                         ),
+                        _buildDrawerItem(
+                          icon: Icons.inventory_2,
+                          title: 'Packing Material Request',
+                          onTap: () {
+                            Navigator.pop(context);
+                            _openScreen('Packing Material Enquiries',  const PackingMaterialEnquiryScreen(),
+                                icon: Icons.inventory_2);
+                          },
+                        ),
+
                       ],
                     ),
 
@@ -1842,16 +1866,16 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                           },
                           isSelected: _activeTab == 'OLX Attribute',
                         ),
-                        _buildDrawerItem(
+                        /*_buildDrawerItem(
                           icon: Icons.card_membership,
                           title: 'OLX Plan',
                           onTap: () {
                             Navigator.pop(context);
-                            _openScreen('OLX Plan', const OlxPlanScreen(), icon: Icons.card_membership);
+                            _openScreen('OLX Plan', const OlxPlansPricingScreen(), icon: Icons.card_membership);
                           },
                           isSelected: _activeTab == 'OLX Plan',
                         ),
-                        _buildDrawerItem(
+                     *//*   _buildDrawerItem(
                           icon: Icons.attach_money,
                           title: 'OLX Pricing',
                           onTap: () {
@@ -1859,7 +1883,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                             _openScreen('OLX Pricing', const OlxPricingScreen(), icon: Icons.attach_money);
                           },
                           isSelected: _activeTab == 'OLX Pricing',
-                        ),
+                        ),*//*
                         _buildDrawerItem(
                           icon: Icons.settings,
                           title: 'OLX Settings',
@@ -1897,6 +1921,103 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                             );
                           },
                           isSelected: _activeTab == 'OLX Communication Settings',
+                        ),*/
+                      ],
+                    ),
+                    // ==================== ✅ SUBSCRIPTION PLANS (NEW MASTER) ====================
+                    ExpansionTile(
+                      title: const Text(
+                        'SUBSCRIPTION PLANS',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black,
+                        ),
+                      ),
+                      leading: const Icon(
+                        Icons.card_membership,
+                        size: 20,
+                        color: Color(0xFFE91E63),
+                      ),
+                      iconColor: const Color(0xFFE91E63),
+                      collapsedIconColor: const Color(0xFFE91E63),
+                      childrenPadding: EdgeInsets.zero,
+                      tilePadding: const EdgeInsets.symmetric(horizontal: 8),
+                      initiallyExpanded: false,
+                      children: [
+                        // 1. Real Estate Property Plan (Property Add)
+                        _buildDrawerItem(
+                          icon: Icons.home_work_outlined,
+                          title: 'Real Estate Property Plan',
+                          onTap: () {
+                            Navigator.pop(context);
+                            _openScreen(
+                              'Real Estate Property Plan',
+                              const PropertySubscriptionScreen(),
+                              icon: Icons.home_work_outlined,
+                            );
+                          },
+                          isSelected: _activeTab == 'Real Estate Property Plan',
+                        ),
+
+                        // 2. Real Estate Customer Plan (Property Buy)
+                        _buildDrawerItem(
+                          icon: Icons.home_outlined,
+                          title: 'Real Estate Customer Plan',
+                          onTap: () {
+                            Navigator.pop(context);
+                            _openScreen(
+                              'Real Estate Customer Plan',
+                              const CustomerSubscriptionPlanScreen(),
+                              icon: Icons.home_outlined,
+                            );
+                          },
+                          isSelected: _activeTab == 'Real Estate Customer Plan',
+                        ),
+
+                        // 3. OLX Product Plan (Product Add) + OLX Settings button
+                        _buildDrawerItem(
+                          icon: Icons.storefront_outlined,
+                          title: 'OLX Product Plan',
+                          onTap: () {
+                            Navigator.pop(context);
+                            _openScreen(
+                              'OLX Product Plan',
+                              const OlxPlansPricingScreen(),
+                              icon: Icons.storefront_outlined,
+                            );
+                          },
+                          isSelected: _activeTab == 'OLX Product Plan',
+                        ),
+
+                        // 4. OLX Chat Plan (Buyer ↔ Seller)
+                        _buildDrawerItem(
+                          icon: Icons.forum_outlined,
+                          title: 'OLX Chat Plan',
+                          onTap: () {
+                            Navigator.pop(context);
+                            _openScreen(
+                              'OLX Chat Plan',
+                              const OlxCommunicationPlanScreen(),
+                              icon: Icons.forum_outlined,
+                            );
+                          },
+                          isSelected: _activeTab == 'OLX Chat Plan',
+                        ),
+
+                        // 5. Boosting Plan (Boost Product)
+                        _buildDrawerItem(
+                          icon: Icons.rocket_launch_outlined,
+                          title: 'Boosting Plan',
+                          onTap: () {
+                            Navigator.pop(context);
+                            _openScreen(
+                              'Boosting Plan',
+                              const BoostingPlanScreen(),
+                              icon: Icons.rocket_launch_outlined,
+                            );
+                          },
+                          isSelected: _activeTab == 'Boosting Plan',
                         ),
                       ],
                     ),
@@ -1996,7 +2117,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                         _openScreen('Marketing Partners', const MarketingPartnersScreen(), icon: Icons.people_outline);
                       },
                     ),
-                    _buildDrawerItem(
+                   /* _buildDrawerItem(
                       icon: Icons.people_outline,
                       title: 'Approved Marketing Partners',
                       onTap: () {
@@ -2011,7 +2132,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                         Navigator.pop(context);
                         _openScreen('Bank Details', const BankDetailsScreen(), icon: Icons.account_balance_wallet_rounded);
                       },
-                    ),
+                    ),*/
                     _buildDrawerSection('PROPERTIES'),
                     _buildDrawerItem(
                       icon: Icons.house,
@@ -2109,7 +2230,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                       isSelected: _activeTab == 'Customer Subscription Plans',
                     ),
 
-                    _buildDrawerItem(
+             /*       _buildDrawerItem(
                       icon: Icons.rocket_launch_outlined,
                       title: 'Boosting Plans',
                       onTap: () {
@@ -2121,9 +2242,9 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                         );
                       },
                       isSelected: _activeTab == 'Boosting Plans',
-                    ),
+                    ),*/
 
-                    _buildDrawerSection('SUBSCRIPTION'),
+                    /*_buildDrawerSection('SUBSCRIPTION'),
                     _buildDrawerItem(
                       icon: Icons.card_membership,
                       title: 'Subscription Plans',
@@ -2136,7 +2257,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                         );
                       },
                       isSelected: _activeTab == 'Subscription Plans',
-                    ),
+                    ),*/
                     _buildDrawerSection('LOAN'),
                     _buildDrawerItem(
                       icon: Icons.assignment,
@@ -2326,7 +2447,16 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
         return const Color(0xFF4158D0);
      // case 'Amenities':  // ✅ Fixed
         return const Color(0xFF3498DB);
-
+      case 'Real Estate Property Plan':
+        return const Color(0xFF2ECC71);
+      case 'Real Estate Customer Plan':
+        return const Color(0xFF27AE60);
+      case 'OLX Product Plan':
+        return const Color(0xFF6366F1);
+      case 'OLX Chat Plan':
+        return const Color(0xFF0891B2);
+      case 'Boosting Plan':
+        return const Color(0xFFEF4444);
       case 'ShipRocket':      // ✅ नवीन केस
         return const Color(0xFF2196F3);  // Blue
       case 'Shipments':       // ✅ नवीन केस
@@ -2337,6 +2467,11 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
         return const Color(0xFF64748B);
       case 'Builders':
         return const Color(0xFF00796B); // Teal
+
+      case 'Banners':
+        return const Color(0xFFE91E63);        // ✅ Pink — Banners
+      case 'Packing Material Request':
+        return const Color(0xFF8B5CF6);
       case 'Return Orders':
         return const Color(0xFFD32F2F); // Deep Orange/Red
       case 'AI Admin':
@@ -2384,6 +2519,13 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     if (icon == Icons.business_center) return const Color(0xFF00796B); // Builders (Teal)
     if (icon == Icons.assignment_return) return const Color(0xFFD32F2F); // Return Orders (Deep Orange/Red)
     if (icon == Icons.psychology) return const Color(0xFF8B5CF6); // AI Admin (Purple)
+    if (icon == Icons.image) return const Color(0xFFE91E63);          // ✅ Banners — Pink
+    if (icon == Icons.inventory_2) return const Color(0xFF8B5CF6);    // ✅ Packing Material — Purple
+    if (icon == Icons.home_work_outlined) return const Color(0xFF2ECC71);
+    if (icon == Icons.home_outlined) return const Color(0xFF27AE60);
+    if (icon == Icons.storefront_outlined) return const Color(0xFF6366F1);
+    if (icon == Icons.forum_outlined) return const Color(0xFF0891B2);
+    if (icon == Icons.rocket_launch_outlined) return const Color(0xFFEF4444);
 // Cyan
     if (icon == Icons.cancel_schedule_send) return const Color(0xFFE53935); // ✅ नवीन line
 
@@ -2474,7 +2616,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                         isSelected: _activeTab == 'SubCategory',
                         onTap: () => _openScreen('SubCategory', const SubCategoryAllScreen(), icon: Icons.subtitles),
                       ),
-                      _buildSidebarMenuItem(
+              /*        _buildSidebarMenuItem(
                         icon: Icons.card_membership,
                         title: 'Real Estate Subscription',
                         isSelected: _activeTab == 'Real Estate Subscription',
@@ -2483,14 +2625,25 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                           const PropertySubscriptionScreen(),
                           icon: Icons.card_membership,
                         ),
-                      ),
+                      ),*/
                       _buildSidebarMenuItem(
                         icon: Icons.inventory_2,
-                        title: 'Packing Material',
+                        title: 'Packing Material Request',
                         isSelected: _activeTab == 'Packing Material Enquiries',
                         onTap: () => _openScreen('Packing Material Enquiries',
                             const PackingMaterialEnquiryScreen(),
                             icon: Icons.inventory_2),
+                      ),
+
+                      _buildSidebarMenuItem(
+                        icon: Icons.image,
+                        title: 'Banners',
+                        isSelected: _activeTab == 'Banners',
+                        onTap: () => _openScreen(
+                          'Banners',
+                          const BannerManagementScreen(),
+                          icon: Icons.image,
+                        ),
                       ),
                     ],
                   ),
@@ -2527,18 +2680,18 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                         isSelected: _activeTab == 'OLX Attribute',
                         onTap: () => _openScreen('OLX Attribute', const OlxAttributeScreen(), icon: Icons.list_alt),
                       ),
-                      _buildSidebarMenuItem(
+                      /*_buildSidebarMenuItem(
                         icon: Icons.card_membership,
                         title: 'OLX Plan',
                         isSelected: _activeTab == 'OLX Plan',
-                        onTap: () => _openScreen('OLX Plan', const OlxPlanScreen(), icon: Icons.card_membership),
+                        onTap: () => _openScreen('OLX Plan', const OlxPlansPricingScreen(), icon: Icons.card_membership),
                       ),
-                      _buildSidebarMenuItem(
+                     *//* _buildSidebarMenuItem(
                         icon: Icons.attach_money,
                         title: 'OLX Pricing',
                         isSelected: _activeTab == 'OLX Pricing',
                         onTap: () => _openScreen('OLX Pricing', const OlxPricingScreen(), icon: Icons.attach_money),
-                      ),
+                      ),*//*
                       _buildSidebarMenuItem(
                         icon: Icons.settings,
                         title: 'OLX Settings',
@@ -2565,6 +2718,81 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                           'OLX Communication Settings',
                           const OlxCommunicationSettingsScreen(),
                           icon: Icons.forum_outlined,
+                        ),
+                      ),*/
+                    ],
+                  ),
+
+                // ==================== ✅ SUBSCRIPTION PLANS MASTER ====================
+                if (_isSidebarExpanded)
+                  ExpansionTile(
+                    tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    childrenPadding: EdgeInsets.zero,
+                    leading: const Icon(
+                      Icons.card_membership,
+                      size: 18,
+                      color: Color(0xFFE91E63),
+                    ),
+                    title: const Text(
+                      'SUBSCRIPTION PLANS',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black,
+                      ),
+                    ),
+                    iconColor: const Color(0xFFE91E63),
+                    collapsedIconColor: const Color(0xFFE91E63),
+                    initiallyExpanded: false,
+                    children: [
+                      _buildSidebarMenuItem(
+                        icon: Icons.home_work_outlined,
+                        title: 'Real Estate Property Plan',
+                        isSelected: _activeTab == 'Real Estate Property Plan',
+                        onTap: () => _openScreen(
+                          'Real Estate Property Plan',
+                          const PropertySubscriptionScreen(),
+                          icon: Icons.home_work_outlined,
+                        ),
+                      ),
+                      _buildSidebarMenuItem(
+                        icon: Icons.home_outlined,
+                        title: 'Real Estate Customer Plan',
+                        isSelected: _activeTab == 'Real Estate Customer Plan',
+                        onTap: () => _openScreen(
+                          'Real Estate Customer Plan',
+                          const CustomerSubscriptionPlanScreen(),
+                          icon: Icons.home_outlined,
+                        ),
+                      ),
+                      _buildSidebarMenuItem(
+                        icon: Icons.storefront_outlined,
+                        title: 'OLX Product Plan',
+                        isSelected: _activeTab == 'OLX Product Plan',
+                        onTap: () => _openScreen(
+                          'OLX Product Plan',
+                          const OlxPlansPricingScreen(),
+                          icon: Icons.storefront_outlined,
+                        ),
+                      ),
+                      _buildSidebarMenuItem(
+                        icon: Icons.forum_outlined,
+                        title: 'OLX Chat Plan',
+                        isSelected: _activeTab == 'OLX Chat Plan',
+                        onTap: () => _openScreen(
+                          'OLX Chat Plan',
+                          const OlxCommunicationPlanScreen(),
+                          icon: Icons.forum_outlined,
+                        ),
+                      ),
+                      _buildSidebarMenuItem(
+                        icon: Icons.rocket_launch_outlined,
+                        title: 'Boosting Plan',
+                        isSelected: _activeTab == 'Boosting Plan',
+                        onTap: () => _openScreen(
+                          'Boosting Plan',
+                          const BoostingPlanScreen(),
+                          icon: Icons.rocket_launch_outlined,
                         ),
                       ),
                     ],
@@ -2643,7 +2871,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                   isSelected: _activeTab == 'Marketing Partners',
                   onTap: () => _openScreen('Marketing Partners', const MarketingPartnersScreen(), icon: Icons.people_outline),
                 ),
-                _buildSidebarMenuItem(
+                /*_buildSidebarMenuItem(
                   icon: Icons.people_outline,
                   title: 'Approved Marketing Partners',
                   isSelected: _activeTab == 'Approved Marketing Partners',
@@ -2654,7 +2882,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                   title: 'Bank Details',
                   isSelected: _activeTab == 'Bank Details',
                   onTap: () => _openScreen('Bank Details', const BankDetailsScreen(), icon: Icons.account_balance_wallet_rounded),
-                ),
+                ),*/
                 if (_isSidebarExpanded) _buildSidebarSection('PROPERTIES'),
                 _buildSidebarMenuItem(
                   icon: Icons.house,
@@ -2728,7 +2956,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                   ),
                 ),
 
-                _buildSidebarMenuItem(
+                /*_buildSidebarMenuItem(
                   icon: Icons.rocket_launch_outlined,
                   title: 'Boosting Plans',
                   isSelected: _activeTab == 'Boosting Plans',
@@ -2749,7 +2977,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                     const SubscriptionPlanScreen(),
                     icon: Icons.card_membership,
                   ),
-                ),
+                ),*/
                 if (_isSidebarExpanded) _buildSidebarSection('LOAN'),
                 _buildSidebarMenuItem(
                   icon: Icons.assignment,
@@ -2878,6 +3106,12 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
           break;
         case 'ShipRocket':      // ✅ नवीन
           iconColor = const Color(0xFF2196F3);
+          break;
+        case 'Banners':
+          iconColor = const Color(0xFFE91E63);   // Pink
+          break;
+        case 'Packing Material Request':
+          iconColor = const Color(0xFF8B5CF6);   // Purple
           break;
         case 'Shipments':       // ✅ नवीन
           iconColor = const Color(0xFF00BCD4);
@@ -3232,81 +3466,14 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
             onTap: _showNotificationsDialog,  // ✅ हे method call होत आहे का?
             isMobile: isMobile,
           ),
-          const SizedBox(width: 8),
-          _buildBannerButton(isMobile),
+
           const SizedBox(width: 4),
           _buildPremiumRegistrationButton(isMobile),
-          const SizedBox(width: 4),
-          _buildUpdateAmountButton(isMobile),
         ],
       ),
     );
   }
-  Widget _buildUpdateAmountButton(bool isMobile) {
-    return AnimatedBuilder(
-      animation: _borderAnimationController,
-      builder: (context, child) {
-        return Container(
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFF11998E), Color(0xFF38EF7D)],
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-            ),
-            borderRadius: BorderRadius.circular(25),
-            border: Border.all(
-              color: _borderColorAnimation.value ?? const Color(0xFF11998E),
-              width: 1.5,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: (_borderColorAnimation.value ?? const Color(0xFF11998E))
-                    .withOpacity(0.4),
-                blurRadius: 8,
-                spreadRadius: 1,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: _showUpdateAmountDialog,
-              borderRadius: BorderRadius.circular(25),
-              child: Container(
-                padding: EdgeInsets.symmetric(
-                  horizontal: isMobile ? 10 : 14,
-                  vertical: isMobile ? 8 : 10,  // ✅ Reference height
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.currency_rupee_rounded,
-                      size: isMobile ? 14 : 16,
-                      color: Colors.white,
-                    ),
-                    if (!isMobile) ...[
-                      const SizedBox(width: 6),
-                      Text(
-                        'Update Amount',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
-                          letterSpacing: 0.3,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
+
 
   Widget _buildPremiumIconButton({
     required IconData icon,

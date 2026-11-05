@@ -7,6 +7,7 @@ import 'package:http_parser/http_parser.dart';
 import 'package:image_picker/image_picker.dart';
 import '../api/api_url.dart';
 import '../api/api_response.dart';
+import '../models/marketing_partner/marketing_agreement_model.dart';
 import '../models/marketing_partner/property_referral_model.dart';
 import '../models/qnx_admin/bank_details_request.dart' hide RetrieveBankDetailsResponse;
 import '../models/qnx_admin/marketing_head_model.dart';
@@ -30,6 +31,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api/api_url.dart';
 import '../models/marketing_partner/update_bank_details_model.dart';
 import '../models/marketing_partner/property_model.dart';
+
+
+import 'dart:typed_data';
+import 'package:http_parser/http_parser.dart';
 
 
 // ----------------------------------------------------------------------
@@ -228,107 +233,195 @@ class MyReferredCompaniesService {
     }
   }
 }
-// ============================= Agreement ===================================
-class AgreementService {
-  Future<Map<String, dynamic>> createPartnerHeadAgreement({
-    required String agreementStartDate,
-    required String agreementEndDate,
-    required String companyOwnerName,
-    required String companyAddress,
-    required String ownerAdharNumber,
-    required String ownerPanNumber,
-    required double profitSharePercentage,
-    required String additionalPoints,
-    required String remarks,
-    required XFile headSignatureImage,
-    required XFile headPictureImage,
-    XFile? agreementPdfFile,
+
+
+// ============================================================
+// ✅ MARKETING PARTNER AGREEMENT SERVICE (Partner Side)
+// ============================================================
+class MarketingPartnerAgreementService {
+  // ============================================================
+  // 1. GET MY AGREEMENTS (my-list)
+  // ============================================================
+  static Future<MarketingPartnerAgreementListResponse> fetchMyAgreements() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('access_token') ?? '';
+
+      print('📤 Fetch My Agreements');
+      print('URL: ${ApiUrls.myMarketingPartnerAgreementList}');
+      print('Token: ${token.isNotEmpty ? "✅ Present" : "❌ Missing"}');
+
+      final response = await http.post(
+        Uri.parse(ApiUrls.myMarketingPartnerAgreementList),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          if (token.isNotEmpty) 'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({}),
+      );
+
+      print('📥 Status: ${response.statusCode}');
+      print('📦 Body: ${response.body}');
+
+      if (response.statusCode == 200) {
+        return MarketingPartnerAgreementListResponse.fromJson(
+            jsonDecode(response.body));
+      }
+      return MarketingPartnerAgreementListResponse(
+        success: false,
+        message: 'Failed: ${response.statusCode}',
+        count: 0,
+        data: [],
+      );
+    } catch (e) {
+      print('❌ Fetch My Agreements Error: $e');
+      return MarketingPartnerAgreementListResponse(
+        success: false,
+        message: 'Error: $e',
+        count: 0,
+        data: [],
+      );
+    }
+  }
+
+  // ============================================================
+  // 2. GET MY APPROVED AGREEMENTS (my)
+  // ============================================================
+
+
+  // ============================================================
+  // 3. PARTNER SIGN AGREEMENT
+  // ============================================================
+  static Future<MarketingPartnerSignResponse?> partnerSignAgreement({
+    required int agreementId,
+    required Uint8List signatureBytes,
   }) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('access_token');
-    if (token == null) {
-      throw Exception('No access token found. Please login again.');
-    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('access_token') ?? '';
 
-    final request = http.MultipartRequest(
-      'POST',
-      Uri.parse(ApiUrls.createPartnerHeadAgreement),
-    );
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse(ApiUrls.marketingPartnerAgreementPartnerSign),
+      );
+      request.headers.addAll({
+        'Accept': 'application/json',
+        if (token.isNotEmpty) 'Authorization': 'Bearer $token',
+      });
 
-    request.headers['Authorization'] = 'Bearer $token';
+      request.fields['agreement_id'] = agreementId.toString();
 
-    request.fields['agreement_start_date'] = agreementStartDate;
-    request.fields['agreement_end_date'] = agreementEndDate;
-    request.fields['company_owner_name'] = companyOwnerName;
-    request.fields['company_address'] = companyAddress;
-    request.fields['owner_adhar_number'] = ownerAdharNumber;
-    request.fields['owner_pan_number'] = ownerPanNumber;
-    request.fields['profit_share_percentage'] = profitSharePercentage.toString();
-    request.fields['additional_points'] = additionalPoints;
-    request.fields['remarks'] = remarks;
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'marketing_partner_sign_s3_key',
+          signatureBytes,
+          filename: 'partner_sign_$agreementId.png',
+          contentType: MediaType('image', 'png'),
+        ),
+      );
 
-    await _addFile(request, headSignatureImage, 'companySign');
-    await _addFile(request, headPictureImage, 'companyPicture');
+      print('📤 Partner Sign Agreement');
+      print('URL: ${ApiUrls.marketingPartnerAgreementPartnerSign}');
+      print('Agreement ID: $agreementId');
+      print('Sign bytes: ${signatureBytes.length}');
 
-    if (agreementPdfFile != null) {
-      await _addFile(request, agreementPdfFile, 'uploadedAgreementPdf');
-    }
+      var streamed = await request.send();
+      var response = await http.Response.fromStream(streamed);
 
-    final response = await request.send();
-    final responseBody = await response.stream.bytesToString();
+      print('📥 Status: ${response.statusCode}');
+      print('📦 Body: ${response.body}');
 
-    if (response.statusCode == 200 || response.statusCode == 201) {
-      return jsonDecode(responseBody);
-    } else {
-      throw Exception('Failed to create agreement: $responseBody');
-    }
-  }
-
-  Future<Map<String, dynamic>> fetchMarketingPartnerAgreement(String partnerId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('access_token');
-    if (token == null) {
-      throw Exception('No access token found. Please login again.');
-    }
-
-    final response = await http.post(
-      Uri.parse(ApiUrls.marketingPartnerAgreement),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $token',
-      },
-      body: jsonEncode({
-        "marketing_partner_id": partnerId,
-      }),
-    );
-
-    if (response.statusCode == 200 || response.statusCode == 201) {
-      return jsonDecode(response.body);
-    } else {
-      throw Exception('Failed to fetch partner agreement: ${response.body}');
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return MarketingPartnerSignResponse.fromJson(jsonDecode(response.body));
+      }
+      return MarketingPartnerSignResponse(
+        success: false,
+        message: 'Failed: ${response.statusCode}',
+      );
+    } catch (e) {
+      print('❌ Partner Sign Error: $e');
+      return MarketingPartnerSignResponse(
+        success: false,
+        message: 'Error: $e',
+      );
     }
   }
 
-  Future<void> _addFile(http.MultipartRequest request, XFile file, String fieldName) async {
-    final bytes = await file.readAsBytes();
-    final mimeType = _getMimeType(file.name);
-    final String primaryType = mimeType == 'pdf' ? 'application' : 'image';
+  // ============================================================
+  // 4. PARTNER REJECT AGREEMENT
+  // ============================================================
+  static Future<MarketingPartnerSignResponse?> partnerRejectAgreement({
+    required int agreementId,
+    required String rejectionReason,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('access_token') ?? '';
 
-    final multipartFile = http.MultipartFile.fromBytes(
-      fieldName,
-      bytes,
-      filename: file.name,
-      contentType: MediaType(primaryType, mimeType),
-    );
-    request.files.add(multipartFile);
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse(ApiUrls.marketingPartnerAgreementPartnerSign),
+      );
+      request.headers.addAll({
+        'Accept': 'application/json',
+        if (token.isNotEmpty) 'Authorization': 'Bearer $token',
+      });
+
+      request.fields['agreement_id'] = agreementId.toString();
+      request.fields['rejection_reason'] = rejectionReason;
+
+      print('📤 Partner Reject Agreement');
+      print('Agreement ID: $agreementId');
+      print('Reason: $rejectionReason');
+
+      var streamed = await request.send();
+      var response = await http.Response.fromStream(streamed);
+
+      print('📥 Status: ${response.statusCode}');
+      print('📦 Body: ${response.body}');
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return MarketingPartnerSignResponse.fromJson(jsonDecode(response.body));
+      }
+      return MarketingPartnerSignResponse(
+        success: false,
+        message: 'Failed: ${response.statusCode}',
+      );
+    } catch (e) {
+      print('❌ Partner Reject Error: $e');
+      return MarketingPartnerSignResponse(
+        success: false,
+        message: 'Error: $e',
+      );
+    }
   }
 
-  String _getMimeType(String fileName) {
-    final lower = fileName.toLowerCase();
-    if (lower.endsWith('.png')) return 'png';
-    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'jpeg';
-    if (lower.endsWith('.pdf')) return 'pdf';
-    return 'jpeg';
+  // ============================================================
+  // 5. DOWNLOAD AGREEMENT PDF
+  // ============================================================
+  static Future<Uint8List?> downloadAgreementPdf(int agreementId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('access_token') ?? '';
+
+      final response = await http.post(
+        Uri.parse(ApiUrls.marketingPartnerAgreementDownload),
+        headers: {
+          'Content-Type': 'application/json',
+          if (token.isNotEmpty) 'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({'agreement_id': agreementId}),
+      );
+
+      if (response.statusCode == 200) {
+        return response.bodyBytes;
+      }
+      return null;
+    } catch (e) {
+      print('❌ Download PDF Error: $e');
+      return null;
+    }
   }
 }
 // ---------------------------------create bank detail---------------------------------
@@ -407,108 +500,7 @@ class RetrieveBankDetailsService {
   }
 }
 // ============================= Marketing Agreement Service ===================================
-class MarketingAgreementService {
-  Future<Map<String, dynamic>> createPartnerHeadAgreement({
-    required String agreementStartDate,
-    required String agreementEndDate,
-    required String companyOwnerName,
-    required String companyAddress,
-    required String ownerAdharNumber,
-    required String ownerPanNumber,
-    required double profitSharePercentage,
-    required String additionalPoints,
-    required String remarks,
-    required XFile headSignatureImage,
-    required XFile headPictureImage,
-    XFile? agreementPdfFile,
-  }) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('access_token');
-    if (token == null) {
-      throw Exception('No access token found. Please login again.');
-    }
 
-    final request = http.MultipartRequest(
-      'POST',
-      Uri.parse(ApiUrls.createPartnerHeadAgreement),
-    );
-
-    request.headers['Authorization'] = 'Bearer $token';
-
-    request.fields['agreement_start_date'] = agreementStartDate;
-    request.fields['agreement_end_date'] = agreementEndDate;
-    request.fields['company_owner_name'] = companyOwnerName;
-    request.fields['company_address'] = companyAddress;
-    request.fields['owner_adhar_number'] = ownerAdharNumber;
-    request.fields['owner_pan_number'] = ownerPanNumber;
-    request.fields['profit_share_percentage'] = profitSharePercentage.toString();
-    request.fields['additional_points'] = additionalPoints;
-    request.fields['remarks'] = remarks;
-
-    await _addFile(request, headSignatureImage, 'companySign');
-    await _addFile(request, headPictureImage, 'companyPicture');
-
-    if (agreementPdfFile != null) {
-      await _addFile(request, agreementPdfFile, 'uploadedAgreementPdf');
-    }
-
-    final response = await request.send();
-    final responseBody = await response.stream.bytesToString();
-
-    if (response.statusCode == 200 || response.statusCode == 201) {
-      return jsonDecode(responseBody);
-    } else {
-      throw Exception('Failed to create agreement: $responseBody');
-    }
-  }
-
-  Future<Map<String, dynamic>> fetchMarketingPartnerAgreement(String partnerId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('access_token');
-    if (token == null) {
-      throw Exception('No access token found. Please login again.');
-    }
-
-    final response = await http.post(
-      Uri.parse(ApiUrls.marketingPartnerAgreement),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $token',
-      },
-      body: jsonEncode({
-        "marketing_partner_id": partnerId,
-      }),
-    );
-
-    if (response.statusCode == 200 || response.statusCode == 201) {
-      return jsonDecode(response.body);
-    } else {
-      throw Exception('Failed to fetch partner agreement: ${response.body}');
-    }
-  }
-
-  Future<void> _addFile(http.MultipartRequest request, XFile file, String fieldName) async {
-    final bytes = await file.readAsBytes();
-    final mimeType = _getMimeType(file.name);
-    final String primaryType = mimeType == 'pdf' ? 'application' : 'image';
-
-    final multipartFile = http.MultipartFile.fromBytes(
-      fieldName,
-      bytes,
-      filename: file.name,
-      contentType: MediaType(primaryType, mimeType),
-    );
-    request.files.add(multipartFile);
-  }
-
-  String _getMimeType(String fileName) {
-    final lower = fileName.toLowerCase();
-    if (lower.endsWith('.png')) return 'png';
-    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'jpeg';
-    if (lower.endsWith('.pdf')) return 'pdf';
-    return 'jpeg';
-  }
-}
 // ===============marketing head bank detail service =====================================================
 class BankDetailsService {
   final http.Client _client;

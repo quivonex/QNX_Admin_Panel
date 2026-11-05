@@ -1,16 +1,24 @@
-// lib/screens/qnx_admin/olx_communication_plan_screen.dart
+// lib/screens/olx/olx_communication_plan_screen.dart
+//
+// OLX Communication Plans — card-based layout that matches the Real Estate
+// "Property Subscription Plans" screen (page header, filter bar, plan cards,
+// create / edit dialogs, details popup, pagination).
+// Existing API calls, models and export (Excel / PDF / DOC) are preserved.
 
 import 'dart:html' as html;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import 'package:excel/excel.dart' as excel;
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
-import 'package:linked_scroll_controller/linked_scroll_controller.dart';
+import 'olx_communication_settings_screen.dart';
 import '../../models/olx/olx_communication_plan_model.dart';
 import '../../api/olx_service.dart';
 
-// ==================== PALETTE ====================
+// ---------------------------------------------------------------------------
+// Screen palette — same colours as the Property Subscription screen.
+// ---------------------------------------------------------------------------
 const Color _kBrand = Color(0xFF6366F1);
 const Color _kInk = Color(0xFF1E293B);
 const Color _kBody = Color(0xFF475569);
@@ -19,8 +27,92 @@ const Color _kFaint = Color(0xFF94A3B8);
 const Color _kBorder = Color(0xFFE2E8F0);
 const Color _kCanvas = Color(0xFFF8FAFC);
 const Color _kSuccess = Color(0xFF10B981);
-const Color _kDanger = Color(0xFFEF4444);
-const Color _kWarning = Color(0xFFF59E0B);
+
+// ---------------------------------------------------------------------------
+// Formatting helpers
+// ---------------------------------------------------------------------------
+String _formatDate(String? dateStr) {
+  if (dateStr == null || dateStr.isEmpty) return '-';
+  try {
+    final dt = DateTime.parse(dateStr).toLocal();
+    return DateFormat('dd/MM/yyyy HH:mm').format(dt);
+  } catch (_) {
+    return dateStr;
+  }
+}
+
+String _currencySymbol(String currency) {
+  switch (currency.toUpperCase()) {
+    case 'INR':
+      return '₹';
+    case 'USD':
+      return '\$';
+    case 'EUR':
+      return '€';
+    default:
+      return '$currency ';
+  }
+}
+
+String _formatPrice(String price, String currency) {
+  final value = double.tryParse(price) ?? 0;
+  final isInr = currency.toUpperCase() == 'INR';
+  final formatter =
+  NumberFormat(isInr ? '#,##,##0.00' : '#,##0.00', isInr ? 'en_IN' : 'en_US');
+  return '${_currencySymbol(currency)}${formatter.format(value)}';
+}
+
+String _periodLabel(String period) {
+  switch (period) {
+    case 'daily':
+      return 'Daily';
+    case 'weekly':
+      return 'Weekly';
+    case 'monthly':
+      return 'Monthly';
+    case 'subscription':
+      return 'Subscription';
+    default:
+      return period;
+  }
+}
+
+String _perPeriod(String period) {
+  switch (period) {
+    case 'daily':
+      return 'per day';
+    case 'weekly':
+      return 'per week';
+    case 'monthly':
+      return 'per month';
+    case 'subscription':
+      return 'per subscription';
+    default:
+      return period;
+  }
+}
+
+String _allowanceLabel(bool unlimited, int limit, String period, String noun) {
+  if (unlimited) return 'Unlimited $noun';
+  return '$limit $noun ${_perPeriod(period)}';
+}
+
+String _validityLabel(int days) {
+  if (days <= 0) return 'Validity not configured';
+  if (days % 365 == 0) {
+    final y = days ~/ 365;
+    return 'Valid for $y ${y == 1 ? 'year' : 'years'} ($days days)';
+  }
+  if (days % 30 == 0) {
+    final m = days ~/ 30;
+    return 'Valid for $m ${m == 1 ? 'month' : 'months'} ($days days)';
+  }
+  if (days % 7 == 0) {
+    final w = days ~/ 7;
+    return 'Valid for $w ${w == 1 ? 'week' : 'weeks'} ($days days)';
+  }
+  return 'Valid for $days ${days == 1 ? 'day' : 'days'}';
+}
 
 class OlxCommunicationPlanScreen extends StatefulWidget {
   const OlxCommunicationPlanScreen({super.key});
@@ -30,237 +122,241 @@ class OlxCommunicationPlanScreen extends StatefulWidget {
       _OlxCommunicationPlanScreenState();
 }
 
-class _OlxCommunicationPlanScreenState extends State<OlxCommunicationPlanScreen>
-    with TickerProviderStateMixin {
+class _OlxCommunicationPlanScreenState
+    extends State<OlxCommunicationPlanScreen> {
   final OlxCommunicationPlanService _service = OlxCommunicationPlanService();
 
-  List<OlxCommunicationPlanData> _allPlans = [];
-  List<OlxCommunicationPlanData> _filteredPlans = [];
-  List<OlxCommunicationPlanData> _paginatedPlans = [];
+  final TextEditingController _searchController = TextEditingController();
+
+  List<OlxCommunicationPlanData> allPlans = [];
+  List<OlxCommunicationPlanData> filteredPlans = [];
+  List<OlxCommunicationPlanData> paginatedPlans = [];
 
   bool _isLoading = true;
-  final TextEditingController _searchController = TextEditingController();
-  String _searchQuery = '';
-  String _filterType = 'All';
+  String? _loadError;
 
-  int _currentPage = 1;
-  int _itemsPerPage = 10;
-  int _totalPages = 1;
-  final List<int> _rowsPerPageOptions = [5, 10, 15, 20, 25, 30, 50];
+  // Search / filter / sort
+  String searchQuery = '';
+  String filterStatus = 'All';
+  String sortOption = _sortNewest;
+  static const List<String> _statusOptions = ['All', 'Active', 'Inactive'];
+  static const String _sortNewest = 'Newest first';
+  static const String _sortDays = 'Days (low to high)';
+  static const String _sortPriceAsc = 'Price (low to high)';
+  static const String _sortPriceDesc = 'Price (high to low)';
+  static const List<String> _sortOptions = [
+    _sortNewest,
+    _sortDays,
+    _sortPriceAsc,
+    _sortPriceDesc,
+  ];
 
-  late AnimationController _borderAnimationController;
-  late Animation<Color?> _borderColorAnimation;
+  static const List<String> _periodOptions = [
+    'daily',
+    'weekly',
+    'monthly',
+    'subscription',
+  ];
+  static const List<String> _currencyOptions = ['INR', 'USD', 'EUR'];
 
-  late LinkedScrollControllerGroup _linkedControllers;
-  late ScrollController _headerHorizontalController;
-  late ScrollController _rowsHorizontalController;
-  final ScrollController _verticalController = ScrollController();
+  // Pagination
+  int currentPage = 1;
+  int itemsPerPage = 9;
+  int totalPages = 1;
+  final List<int> rowsPerPageOptions = [3, 6, 9, 12, 15, 30];
 
-  // Column widths
-  final Map<int, TableColumnWidth> _columnWidths = const {
-    0: FixedColumnWidth(60),   // Sr No
-    1: FixedColumnWidth(180),  // Name
-    2: FixedColumnWidth(100),  // Price
-    3: FixedColumnWidth(100),  // Duration
-    4: FixedColumnWidth(140),  // Chat
-    5: FixedColumnWidth(140),  // Enquiry
-    6: FixedColumnWidth(100),  // Status
-    7: FixedColumnWidth(100),  // Actions
-  };
+  // Card accents — same tones as the Property Subscription screen.
+  static const List<Color> _cardAccents = [
+    Color(0xFF10B981), // emerald
+    Color(0xFF0EA5E9), // sky
+    Color(0xFF1E3A5F), // deep navy
+    Color(0xFF6366F1), // indigo
+    Color(0xFF8B5CF6), // violet
+    Color(0xFFF59E0B), // amber
+  ];
 
-  final List<String> _headerLabels = [
-    "Sr.No",
-    "Name",
-    "Price",
-    "Duration",
-    "Chat",
-    "Enquiry",
-    "Status",
-    "Actions"
+  static const List<IconData> _cardIcons = [
+    Icons.chat_bubble_outline_rounded,
+    Icons.forum_outlined,
+    Icons.question_answer_outlined,
+    Icons.support_agent_rounded,
+    Icons.mark_chat_read_outlined,
+    Icons.workspace_premium_outlined,
   ];
 
   @override
   void initState() {
     super.initState();
-    _linkedControllers = LinkedScrollControllerGroup();
-    _headerHorizontalController = _linkedControllers.addAndGet();
-    _rowsHorizontalController = _linkedControllers.addAndGet();
-
-    _fetchPlans();
-
-    _borderAnimationController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    )..repeat(reverse: true);
-
-    _borderColorAnimation = ColorTween(
-      begin: const Color(0xFF4158D0),
-      end: const Color(0xFFC850C0),
-    ).animate(_borderAnimationController);
+    loadPlans();
   }
 
   @override
   void dispose() {
     _searchController.dispose();
-    _borderAnimationController.dispose();
-    _headerHorizontalController.dispose();
-    _rowsHorizontalController.dispose();
-    _verticalController.dispose();
     _service.dispose();
     super.dispose();
   }
 
-  Future<void> _fetchPlans() async {
-    setState(() => _isLoading = true);
+  // ==================== LOAD (EXISTING API CALL PRESERVED) ====================
+  Future<void> loadPlans() async {
+    setState(() {
+      _isLoading = true;
+      _loadError = null;
+    });
     try {
       final response = await _service.getPlans(includeInactive: true);
       if (mounted) {
         setState(() {
-          _allPlans = response.data..sort((a, b) => b.id.compareTo(a.id));
-          _applyFilters();
+          allPlans = response.data..sort((a, b) => b.id.compareTo(a.id));
           _isLoading = false;
+          applyFilters();
         });
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _isLoading = false);
-        _showSnackBar("Failed to load plans: $e", _kDanger);
+        setState(() {
+          _isLoading = false;
+          _loadError =
+          'Plans could not be loaded. Check your connection and try again.';
+        });
+        _showSnackBar('Failed to load plans: $e', isError: true);
       }
     }
   }
 
-  void _applyFilters() {
-    if (_filterType == 'All' && _searchQuery.isEmpty) {
-      _filteredPlans = _allPlans;
-    } else if (_filterType == 'Active') {
-      _filteredPlans = _allPlans.where((p) => p.isActive).toList();
-    } else if (_filterType == 'Inactive') {
-      _filteredPlans = _allPlans.where((p) => !p.isActive).toList();
-    } else {
-      final query = _searchQuery.toLowerCase();
-      _filteredPlans = _allPlans.where((p) {
-        return p.name.toLowerCase().contains(query) ||
-            p.description.toLowerCase().contains(query);
-      }).toList();
+  bool get _hasActiveFilters =>
+      searchQuery.isNotEmpty ||
+          filterStatus != 'All' ||
+          sortOption != _sortNewest;
+
+  void applyFilters() {
+    final query = searchQuery.trim().toLowerCase();
+
+    final list = allPlans.where((p) {
+      final matchesSearch = query.isEmpty ||
+          p.name.toLowerCase().contains(query) ||
+          p.description.toLowerCase().contains(query);
+
+      final matchesStatus = filterStatus == 'All' ||
+          (filterStatus == 'Active' && p.isActive) ||
+          (filterStatus == 'Inactive' && !p.isActive);
+
+      return matchesSearch && matchesStatus;
+    }).toList();
+
+    double priceOf(OlxCommunicationPlanData p) => double.tryParse(p.price) ?? 0;
+
+    switch (sortOption) {
+      case _sortDays:
+        list.sort((a, b) => a.durationDays.compareTo(b.durationDays));
+        break;
+      case _sortPriceAsc:
+        list.sort((a, b) => priceOf(a).compareTo(priceOf(b)));
+        break;
+      case _sortPriceDesc:
+        list.sort((a, b) => priceOf(b).compareTo(priceOf(a)));
+        break;
+      default:
+        list.sort((a, b) => b.id.compareTo(a.id));
     }
-    _applyPagination();
+
+    filteredPlans = list;
+    applyPagination();
   }
 
-  void _applyPagination() {
-    if (_filteredPlans.isEmpty) {
-      _paginatedPlans = [];
-      _totalPages = 1;
-      _currentPage = 1;
+  void applyPagination() {
+    if (filteredPlans.isEmpty) {
+      paginatedPlans = [];
+      totalPages = 1;
+      currentPage = 1;
       setState(() {});
       return;
     }
-    _totalPages = (_filteredPlans.length / _itemsPerPage).ceil();
-    if (_currentPage > _totalPages) _currentPage = _totalPages;
-    if (_currentPage < 1) _currentPage = 1;
-    final start = (_currentPage - 1) * _itemsPerPage;
-    int end = start + _itemsPerPage;
-    if (end > _filteredPlans.length) end = _filteredPlans.length;
-    _paginatedPlans = _filteredPlans.sublist(start, end);
+
+    totalPages = (filteredPlans.length / itemsPerPage).ceil();
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+
+    int startIndex = (currentPage - 1) * itemsPerPage;
+    int endIndex = startIndex + itemsPerPage;
+    if (endIndex > filteredPlans.length) endIndex = filteredPlans.length;
+
+    paginatedPlans = filteredPlans.sublist(startIndex, endIndex);
     setState(() {});
   }
 
-  void _nextPage() {
-    if (_currentPage < _totalPages) {
+  void nextPage() {
+    if (currentPage < totalPages) {
       setState(() {
-        _currentPage++;
-        _applyPagination();
+        currentPage++;
+        applyPagination();
       });
     }
   }
 
-  void _previousPage() {
-    if (_currentPage > 1) {
+  void previousPage() {
+    if (currentPage > 1) {
       setState(() {
-        _currentPage--;
-        _applyPagination();
+        currentPage--;
+        applyPagination();
       });
     }
   }
 
-  void _goToPage(int page) {
-    if (page >= 1 && page <= _totalPages) {
+  void goToPage(int page) {
+    if (page >= 1 && page <= totalPages) {
       setState(() {
-        _currentPage = page;
-        _applyPagination();
+        currentPage = page;
+        applyPagination();
       });
     }
   }
 
-  void _changeItemsPerPage(int? value) {
+  void changeItemsPerPage(int? value) {
     if (value != null) {
       setState(() {
-        _itemsPerPage = value;
-        _currentPage = 1;
-        _applyPagination();
+        itemsPerPage = value;
+        currentPage = 1;
+        applyPagination();
       });
     }
   }
 
-  void _resetFilters() {
+  void resetFilters() {
     setState(() {
-      _searchQuery = '';
-      _filterType = 'All';
+      searchQuery = '';
+      filterStatus = 'All';
+      sortOption = _sortNewest;
       _searchController.clear();
-      _currentPage = 1;
-      _applyFilters();
+      currentPage = 1;
+      applyFilters();
     });
   }
 
-  void _showSnackBar(String msg, Color color) {
+  void _showSnackBar(String message, {bool isError = false}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
           children: [
             Icon(
-              color == _kSuccess ? Icons.check_circle : Icons.error_outline,
+              isError ? Icons.error_outline : Icons.check_circle_outline,
               color: Colors.white,
               size: 20,
             ),
             const SizedBox(width: 10),
-            Expanded(child: Text(msg)),
+            Expanded(child: Text(message)),
           ],
         ),
-        backgroundColor: color,
-        duration: const Duration(seconds: 2),
+        backgroundColor: isError ? Colors.red.shade600 : _kBrand,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
     );
   }
 
-  String _formatDate(String? dateStr) {
-    if (dateStr == null || dateStr.isEmpty) return '-';
-    try {
-      final dt = DateTime.parse(dateStr).toLocal();
-      return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
-    } catch (_) {
-      return dateStr;
-    }
-  }
-
-  String _periodLabel(String period) {
-    switch (period) {
-      case 'daily':
-        return 'Daily';
-      case 'weekly':
-        return 'Weekly';
-      case 'monthly':
-        return 'Monthly';
-      case 'subscription':
-        return 'Subscription';
-      default:
-        return period;
-    }
-  }
-
-  // ========== EXPORT FUNCTIONS ==========
-  void _exportExcel() {
+  // ==================== EXPORT FUNCTIONS (PRESERVED) ====================
+  void exportExcel() {
     try {
       final excelFile = excel.Excel.createExcel();
       final sheet = excelFile['Communication Plans'];
@@ -269,7 +365,7 @@ class _OlxCommunicationPlanScreenState extends State<OlxCommunicationPlanScreen>
         'Duration', 'Chat Limit', 'Chat Period', 'Enquiry Limit',
         'Enquiry Period', 'Status'
       ]);
-      for (var p in _filteredPlans) {
+      for (var p in filteredPlans) {
         sheet.appendRow([
           p.id.toString(),
           p.name,
@@ -289,25 +385,28 @@ class _OlxCommunicationPlanScreenState extends State<OlxCommunicationPlanScreen>
         final blob = html.Blob([bytes]);
         final url = html.Url.createObjectUrlFromBlob(blob);
         html.AnchorElement(href: url)
-          ..setAttribute("download", "olx_communication_plans.xlsx")
+          ..setAttribute('download', 'olx_communication_plans.xlsx')
           ..click();
         html.Url.revokeObjectUrl(url);
-        _showSnackBar('Excel exported successfully!', _kSuccess);
+        _showSnackBar('Excel exported successfully!');
       }
     } catch (e) {
-      _showSnackBar('Error exporting Excel: $e', _kDanger);
+      _showSnackBar('Error exporting Excel: $e', isError: true);
     }
   }
 
-  Future<void> _exportPDF() async {
+  Future<void> exportPDF() async {
     try {
       final pdf = pw.Document();
       pdf.addPage(
         pw.Page(
           build: (pw.Context context) {
             return pw.Table.fromTextArray(
-              headers: ['ID', 'Name', 'Price', 'Duration', 'Chat', 'Enquiry', 'Status'],
-              data: _filteredPlans.map((p) => [
+              headers: [
+                'ID', 'Name', 'Price', 'Duration', 'Chat', 'Enquiry', 'Status'
+              ],
+              data: filteredPlans
+                  .map((p) => [
                 p.id.toString(),
                 p.name,
                 '${p.currency} ${p.price}',
@@ -315,111 +414,802 @@ class _OlxCommunicationPlanScreenState extends State<OlxCommunicationPlanScreen>
                 p.chatUnlimited ? 'Unlimited' : '${p.chatLimit}',
                 p.enquiryUnlimited ? 'Unlimited' : '${p.enquiryLimit}',
                 p.isActive ? 'Active' : 'Inactive',
-              ]).toList(),
+              ])
+                  .toList(),
             );
           },
         ),
       );
       await Printing.layoutPdf(onLayout: (format) async => pdf.save());
-      _showSnackBar('PDF exported successfully!', _kSuccess);
+      _showSnackBar('PDF exported successfully!');
     } catch (e) {
-      _showSnackBar('Error exporting PDF: $e', _kDanger);
+      _showSnackBar('Error exporting PDF: $e', isError: true);
     }
   }
 
-  void _exportDOC() {
+  void exportDOC() {
     try {
       final content = StringBuffer();
-      content.writeln("OLX Communication Plans\n");
-      content.writeln("=" * 80);
-      for (var p in _filteredPlans) {
-        content.writeln("ID: ${p.id}");
-        content.writeln("Name: ${p.name}");
-        content.writeln("Description: ${p.description}");
-        content.writeln("Price: ${p.currency} ${p.price}");
-        content.writeln("Duration: ${p.durationDays} days");
-        content.writeln("Chat: ${p.chatUnlimited ? 'Unlimited' : p.chatLimit} (${_periodLabel(p.chatLimitPeriod)})");
-        content.writeln("Enquiry: ${p.enquiryUnlimited ? 'Unlimited' : p.enquiryLimit} (${_periodLabel(p.enquiryLimitPeriod)})");
-        content.writeln("Status: ${p.isActive ? 'Active' : 'Inactive'}");
-        content.writeln("-" * 40);
+      content.writeln('OLX Communication Plans\n');
+      content.writeln('=' * 80);
+      for (var p in filteredPlans) {
+        content.writeln('ID: ${p.id}');
+        content.writeln('Name: ${p.name}');
+        content.writeln('Description: ${p.description}');
+        content.writeln('Price: ${p.currency} ${p.price}');
+        content.writeln('Duration: ${p.durationDays} days');
+        content.writeln(
+            'Chat: ${p.chatUnlimited ? 'Unlimited' : p.chatLimit} (${_periodLabel(p.chatLimitPeriod)})');
+        content.writeln(
+            'Enquiry: ${p.enquiryUnlimited ? 'Unlimited' : p.enquiryLimit} (${_periodLabel(p.enquiryLimitPeriod)})');
+        content.writeln('Status: ${p.isActive ? 'Active' : 'Inactive'}');
+        content.writeln('-' * 40);
       }
       final blob = html.Blob([content.toString()]);
       final url = html.Url.createObjectUrlFromBlob(blob);
       html.AnchorElement(href: url)
-        ..setAttribute("download", "olx_communication_plans.doc")
+        ..setAttribute('download', 'olx_communication_plans.doc')
         ..click();
       html.Url.revokeObjectUrl(url);
-      _showSnackBar('DOC exported successfully!', _kSuccess);
+      _showSnackBar('DOC exported successfully!');
     } catch (e) {
-      _showSnackBar('Error exporting DOC: $e', _kDanger);
+      _showSnackBar('Error exporting DOC: $e', isError: true);
     }
   }
 
-  Widget _buildExportIcons() {
-    return Row(
+  // ==================== CREATE / UPDATE PLAN POPUP ====================
+  // One dialog for both flows. `plan == null` → create, otherwise → update.
+  Future<void> _openPlanFormDialog({OlxCommunicationPlanData? plan}) async {
+    final isEdit = plan != null;
+    final formKey = GlobalKey<FormState>();
+    final nameController = TextEditingController(text: plan?.name ?? '');
+    final descriptionController =
+    TextEditingController(text: plan?.description ?? '');
+    final priceController = TextEditingController(text: plan?.price ?? '');
+    final durationController =
+    TextEditingController(text: plan != null ? '${plan.durationDays}' : '');
+    final chatLimitController =
+    TextEditingController(text: plan != null ? '${plan.chatLimit}' : '');
+    final enquiryLimitController =
+    TextEditingController(text: plan != null ? '${plan.enquiryLimit}' : '');
+
+    String currency =
+    _currencyOptions.contains(plan?.currency) ? plan!.currency : 'INR';
+    bool chatUnlimited = plan?.chatUnlimited ?? false;
+    String chatPeriod = _periodOptions.contains(plan?.chatLimitPeriod)
+        ? plan!.chatLimitPeriod
+        : 'daily';
+    bool enquiryUnlimited = plan?.enquiryUnlimited ?? false;
+    String enquiryPeriod = _periodOptions.contains(plan?.enquiryLimitPeriod)
+        ? plan!.enquiryLimitPeriod
+        : 'daily';
+    bool isActive = plan?.isActive ?? true;
+    bool isSubmitting = false;
+    String? formError;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final theme = Theme.of(context);
+            final media = MediaQuery.of(context).size;
+            final isSmall = media.width < 640;
+            final dialogWidth =
+            isSmall ? media.width : (media.width < 1024 ? 560.0 : 640.0);
+
+            Future<void> submit() async {
+              if (!formKey.currentState!.validate()) return;
+              setDialogState(() {
+                isSubmitting = true;
+                formError = null;
+              });
+
+              final name = nameController.text.trim();
+              final description = descriptionController.text.trim();
+              final price = priceController.text.trim();
+              final duration = int.tryParse(durationController.text.trim()) ?? 0;
+              final chatLimit = chatUnlimited
+                  ? 0
+                  : (int.tryParse(chatLimitController.text.trim()) ?? 0);
+              final enquiryLimit = enquiryUnlimited
+                  ? 0
+                  : (int.tryParse(enquiryLimitController.text.trim()) ?? 0);
+
+              try {
+                if (!isEdit) {
+                  final response = await _service.createPlan(
+                    OlxCommunicationPlanCreateRequest(
+                      name: name,
+                      description: description,
+                      price: price,
+                      currency: currency,
+                      durationDays: duration,
+                      chatLimit: chatLimit,
+                      chatUnlimited: chatUnlimited,
+                      chatLimitPeriod: chatPeriod,
+                      enquiryLimit: enquiryLimit,
+                      enquiryUnlimited: enquiryUnlimited,
+                      enquiryLimitPeriod: enquiryPeriod,
+                      isActive: isActive,
+                    ),
+                  );
+                  if (!mounted) return;
+
+                  if (response.status) {
+                    Navigator.of(dialogContext).pop();
+                    _showSnackBar(response.message.isNotEmpty
+                        ? response.message
+                        : 'Plan created successfully');
+                    await loadPlans();
+                  } else {
+                    setDialogState(() {
+                      isSubmitting = false;
+                      formError = response.message;
+                    });
+                  }
+                } else {
+                  final response = await _service.updatePlan(
+                    OlxCommunicationPlanUpdateRequest(
+                      planId: plan!.id,
+                      name: name,
+                      description: description,
+                      price: price,
+                      currency: currency,
+                      durationDays: duration,
+                      chatLimit: chatLimit,
+                      chatUnlimited: chatUnlimited,
+                      chatLimitPeriod: chatPeriod,
+                      enquiryLimit: enquiryLimit,
+                      enquiryUnlimited: enquiryUnlimited,
+                      enquiryLimitPeriod: enquiryPeriod,
+                      isActive: isActive,
+                    ),
+                  );
+                  if (!mounted) return;
+
+                  if (response.status) {
+                    Navigator.of(dialogContext).pop();
+                    _showSnackBar(response.message.isNotEmpty
+                        ? response.message
+                        : 'Plan updated successfully');
+                    final updated = response.data;
+                    if (updated != null) {
+                      // Replace in the local lists — the edited plan stays
+                      // exactly where it is, no reload and no re-filter.
+                      final aIdx =
+                      allPlans.indexWhere((p) => p.id == updated.id);
+                      if (aIdx != -1) allPlans[aIdx] = updated;
+                      final fIdx =
+                      filteredPlans.indexWhere((p) => p.id == updated.id);
+                      if (fIdx != -1) filteredPlans[fIdx] = updated;
+                      final pIdx =
+                      paginatedPlans.indexWhere((p) => p.id == updated.id);
+                      if (pIdx != -1) paginatedPlans[pIdx] = updated;
+                      setState(() {});
+                    } else {
+                      await loadPlans();
+                    }
+                  } else {
+                    setDialogState(() {
+                      isSubmitting = false;
+                      formError = response.message;
+                    });
+                  }
+                }
+              } catch (e) {
+                if (!mounted) return;
+                setDialogState(() {
+                  isSubmitting = false;
+                  formError = '$e'.replaceFirst('Exception: ', '');
+                });
+              }
+            }
+
+            final cancelButton = OutlinedButton(
+              onPressed: isSubmitting
+                  ? null
+                  : () => Navigator.of(dialogContext).pop(),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _kBody,
+                side: const BorderSide(color: _kBorder),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              child: const Text('Cancel'),
+            );
+
+            final submitButton = FilledButton.icon(
+              onPressed: isSubmitting ? null : submit,
+              style: FilledButton.styleFrom(
+                backgroundColor: _kBrand,
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: _kBrand.withOpacity(0.6),
+                disabledForegroundColor: Colors.white,
+                padding:
+                const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              icon: isSubmitting
+                  ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  color: Colors.white,
+                  strokeWidth: 2,
+                ),
+              )
+                  : Icon(isEdit ? Icons.save_rounded : Icons.add_rounded,
+                  size: 20),
+              label: Text(
+                isSubmitting
+                    ? (isEdit ? 'Updating...' : 'Creating...')
+                    : (isEdit ? 'Update Plan' : 'Create Plan'),
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            );
+
+            Widget nameField() => _buildTextField(
+              controller: nameController,
+              label: 'Plan Name',
+              icon: Icons.label_outline,
+              hint: 'e.g. Silver Communication Plan',
+              enabled: !isSubmitting,
+              validator: (v) => (v == null || v.trim().isEmpty)
+                  ? 'Plan Name is required'
+                  : null,
+            );
+
+            Widget descriptionField() => _buildTextField(
+              controller: descriptionController,
+              label: 'Description',
+              icon: Icons.description_outlined,
+              hint: 'What does this plan include?',
+              enabled: !isSubmitting,
+              maxLines: 3,
+              isRequired: false,
+            );
+
+            Widget priceField() => _buildTextField(
+              controller: priceController,
+              label: 'Price',
+              icon: Icons.payments_outlined,
+              hint: 'e.g. 199.00',
+              enabled: !isSubmitting,
+              keyboardType:
+              const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+              ],
+              validator: (v) {
+                final text = (v ?? '').trim();
+                if (text.isEmpty) return 'Price is required';
+                final value = double.tryParse(text);
+                if (value == null) return 'Enter a valid price';
+                if (value < 0) return 'Price cannot be negative';
+                return null;
+              },
+            );
+
+            Widget currencyField() => _buildFormDropdown<String>(
+              label: 'Currency',
+              value: currency,
+              items: _currencyOptions,
+              enabled: !isSubmitting,
+              onChanged: (v) => setDialogState(() => currency = v ?? 'INR'),
+            );
+
+            Widget durationField() => _buildTextField(
+              controller: durationController,
+              label: 'Duration (Days)',
+              icon: Icons.timer_outlined,
+              hint: 'e.g. 30',
+              enabled: !isSubmitting,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              validator: (v) {
+                final text = (v ?? '').trim();
+                if (text.isEmpty) return 'Duration (Days) is required';
+                final days = int.tryParse(text);
+                if (days == null || days <= 0) {
+                  return 'Enter a valid number of days';
+                }
+                return null;
+              },
+            );
+
+            // Chat / enquiry allowance block (unlimited switch + limit + period)
+            Widget allowanceBlock({
+              required String noun,
+              required IconData icon,
+              required bool unlimited,
+              required ValueChanged<bool> onUnlimited,
+              required TextEditingController limitController,
+              required String period,
+              required ValueChanged<String?> onPeriod,
+              required String hint,
+            }) {
+              final limitField = _buildTextField(
+                controller: limitController,
+                label: '$noun Limit',
+                icon: icon,
+                hint: hint,
+                enabled: !isSubmitting && !unlimited,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                isRequired: !unlimited,
+                validator: unlimited
+                    ? null
+                    : (v) => (v == null || v.trim().isEmpty)
+                    ? '$noun Limit is required'
+                    : null,
+              );
+              final periodField = _buildFormDropdown<String>(
+                label: '$noun Period',
+                value: period,
+                items: _periodOptions,
+                labelOf: _periodLabel,
+                enabled: !isSubmitting && !unlimited,
+                onChanged: onPeriod,
+              );
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildSwitchTile(
+                    icon: icon,
+                    title: 'Unlimited ${noun}s',
+                    subtitle: 'Enable unlimited ${noun.toLowerCase()} allowance',
+                    value: unlimited,
+                    onChanged: isSubmitting ? null : onUnlimited,
+                  ),
+                  if (!unlimited) ...[
+                    const SizedBox(height: 14),
+                    if (isSmall) ...[
+                      limitField,
+                      const SizedBox(height: 16),
+                      periodField,
+                    ] else
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(child: limitField),
+                          const SizedBox(width: 16),
+                          Expanded(child: periodField),
+                        ],
+                      ),
+                  ],
+                ],
+              );
+            }
+
+            return Dialog(
+              insetPadding: EdgeInsets.symmetric(
+                horizontal: isSmall ? 12 : 24,
+                vertical: 24,
+              ),
+              backgroundColor: Colors.white,
+              surfaceTintColor: Colors.transparent,
+              clipBehavior: Clip.antiAlias,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20)),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: dialogWidth,
+                  maxHeight: media.height * 0.9,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Header
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(24, 20, 12, 16),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            width: 44,
+                            height: 44,
+                            decoration: BoxDecoration(
+                              color: _kBrand.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Icon(
+                              isEdit
+                                  ? Icons.edit_outlined
+                                  : Icons.post_add_rounded,
+                              color: _kBrand,
+                              size: 22,
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  isEdit ? 'Update Plan' : 'Create Plan',
+                                  style: theme.textTheme.titleLarge?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    color: _kInk,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  isEdit
+                                      ? 'Edit this communication plan'
+                                      : 'Set chat and enquiry allowances',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: _kMuted,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Close',
+                            onPressed: isSubmitting
+                                ? null
+                                : () => Navigator.of(dialogContext).pop(),
+                            icon:
+                            const Icon(Icons.close_rounded, color: _kMuted),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1, color: _kBorder),
+
+                    // Scrollable form body
+                    Flexible(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+                        child: Form(
+                          key: formKey,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (formError != null) ...[
+                                _buildFormErrorBanner(formError!),
+                                const SizedBox(height: 18),
+                              ],
+                              _buildSectionLabel('Plan details'),
+                              const SizedBox(height: 14),
+                              nameField(),
+                              const SizedBox(height: 16),
+                              descriptionField(),
+                              const SizedBox(height: 16),
+                              if (isSmall) ...[
+                                priceField(),
+                                const SizedBox(height: 16),
+                                currencyField(),
+                                const SizedBox(height: 16),
+                                durationField(),
+                              ] else ...[
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Expanded(flex: 2, child: priceField()),
+                                    const SizedBox(width: 16),
+                                    Expanded(child: currencyField()),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                                durationField(),
+                              ],
+                              const SizedBox(height: 24),
+                              _buildSectionLabel('Chat allowance'),
+                              const SizedBox(height: 14),
+                              allowanceBlock(
+                                noun: 'Chat',
+                                icon: Icons.chat_bubble_outline_rounded,
+                                unlimited: chatUnlimited,
+                                onUnlimited: (v) =>
+                                    setDialogState(() => chatUnlimited = v),
+                                limitController: chatLimitController,
+                                period: chatPeriod,
+                                onPeriod: (v) => setDialogState(
+                                        () => chatPeriod = v ?? 'daily'),
+                                hint: 'e.g. 100',
+                              ),
+                              const SizedBox(height: 24),
+                              _buildSectionLabel('Enquiry allowance'),
+                              const SizedBox(height: 14),
+                              allowanceBlock(
+                                noun: 'Enquiry',
+                                icon: Icons.question_answer_outlined,
+                                unlimited: enquiryUnlimited,
+                                onUnlimited: (v) => setDialogState(
+                                        () => enquiryUnlimited = v),
+                                limitController: enquiryLimitController,
+                                period: enquiryPeriod,
+                                onPeriod: (v) => setDialogState(
+                                        () => enquiryPeriod = v ?? 'daily'),
+                                hint: 'e.g. 25',
+                              ),
+                              const SizedBox(height: 24),
+                              _buildSectionLabel('Availability'),
+                              const SizedBox(height: 14),
+                              _buildSwitchTile(
+                                icon: isActive
+                                    ? Icons.check_circle_outline_rounded
+                                    : Icons.pause_circle_outline_rounded,
+                                iconColor: isActive ? _kSuccess : _kMuted,
+                                title: 'Active status',
+                                subtitle: isActive
+                                    ? 'This plan will be saved as active'
+                                    : 'This plan will be saved as inactive',
+                                value: isActive,
+                                onChanged: isSubmitting
+                                    ? null
+                                    : (v) => setDialogState(() => isActive = v),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    const Divider(height: 1, color: _kBorder),
+
+                    // Footer actions
+                    Container(
+                      color: _kCanvas,
+                      padding: const EdgeInsets.fromLTRB(24, 14, 24, 18),
+                      child: Row(
+                        children: isSmall
+                            ? [
+                          Expanded(child: cancelButton),
+                          const SizedBox(width: 12),
+                          Expanded(child: submitButton),
+                        ]
+                            : [
+                          Expanded(
+                            child: Text.rich(
+                              TextSpan(
+                                children: [
+                                  TextSpan(
+                                    text: '* ',
+                                    style: TextStyle(
+                                      color: theme.colorScheme.error,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const TextSpan(text: 'Required fields'),
+                                ],
+                              ),
+                              style: const TextStyle(
+                                  color: _kMuted, fontSize: 12.5),
+                            ),
+                          ),
+                          cancelButton,
+                          const SizedBox(width: 12),
+                          submitButton,
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    nameController.dispose();
+    descriptionController.dispose();
+    priceController.dispose();
+    durationController.dispose();
+    chatLimitController.dispose();
+    enquiryLimitController.dispose();
+  }
+  // ✅ NEW: OLX Communication Settings Popup
+  void _openCommunicationSettingsPopup() {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        backgroundColor: Colors.white,
+        insetPadding: const EdgeInsets.all(16),
+        child: Container(
+          width: 1000,
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.95,
+            maxHeight: MediaQuery.of(context).size.height * 0.9,
+          ),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header
+              Container(
+                padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Color(0xFF4158D0), Color(0xFFC850C0)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.only(
+                    topLeft: Radius.circular(20),
+                    topRight: Radius.circular(20),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(
+                        Icons.settings,
+                        color: Colors.white,
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Communication Settings',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            'Configure chat & enquiry modes, limits and blocking',
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () => Navigator.pop(dialogContext),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                  ],
+                ),
+              ),
+              // Body — embedded settings form
+              Flexible(
+                child: ClipRRect(
+                  borderRadius: const BorderRadius.only(
+                    bottomLeft: Radius.circular(20),
+                    bottomRight: Radius.circular(20),
+                  ),
+                  child: const OlxCommunicationSettingsScreen(embedded: true),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSwitchTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool value,
+    required ValueChanged<bool>? onChanged,
+    Color iconColor = _kMuted,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: _kCanvas,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _kBorder),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: iconColor, size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: _kInk,
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: const TextStyle(color: _kMuted, fontSize: 12.5),
+                ),
+              ],
+            ),
+          ),
+          Switch(
+            value: value,
+            activeTrackColor: _kBrand,
+            onChanged: onChanged,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFormDropdown<T>({
+    required String label,
+    required T value,
+    required List<T> items,
+    required ValueChanged<T?> onChanged,
+    bool enabled = true,
+    String Function(T)? labelOf,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Tooltip(
-          message: "Export Excel",
-          child: InkWell(
-            onTap: _exportExcel,
-            borderRadius: BorderRadius.circular(10),
-            child: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.green.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Image.asset(
-                "assets/icon/xls.png",
-                height: 20,
-                width: 20,
-                errorBuilder: (_, __, ___) =>
-                const Icon(Icons.table_chart, color: Colors.green, size: 20),
-              ),
-            ),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: _kInk,
           ),
         ),
-        const SizedBox(width: 8),
-        Tooltip(
-          message: "Export PDF",
-          child: InkWell(
-            onTap: _exportPDF,
-            borderRadius: BorderRadius.circular(10),
-            child: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.red.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Image.asset(
-                "assets/icon/pdf.png",
-                height: 20,
-                width: 20,
-                errorBuilder: (_, __, ___) =>
-                const Icon(Icons.picture_as_pdf, color: Colors.red, size: 20),
-              ),
+        const SizedBox(height: 8),
+        InputDecorator(
+          decoration: InputDecoration(
+            filled: true,
+            fillColor: _kCanvas,
+            contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: _kBorder),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: _kBorder),
             ),
           ),
-        ),
-        const SizedBox(width: 8),
-        Tooltip(
-          message: "Export DOC",
-          child: InkWell(
-            onTap: _exportDOC,
-            borderRadius: BorderRadius.circular(10),
-            child: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.blue.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Image.asset(
-                "assets/icon/doc.png",
-                height: 20,
-                width: 20,
-                errorBuilder: (_, __, ___) =>
-                const Icon(Icons.description, color: Colors.blue, size: 20),
-              ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<T>(
+              value: value,
+              isExpanded: true,
+              isDense: true,
+              borderRadius: BorderRadius.circular(12),
+              dropdownColor: Colors.white,
+              icon: const Icon(Icons.keyboard_arrow_down_rounded,
+                  size: 20, color: _kMuted),
+              style: const TextStyle(fontSize: 14, color: _kInk),
+              items: items
+                  .map((e) => DropdownMenuItem<T>(
+                value: e,
+                child: Text(labelOf != null ? labelOf(e) : '$e'),
+              ))
+                  .toList(),
+              onChanged: enabled ? onChanged : null,
             ),
           ),
         ),
@@ -427,42 +1217,260 @@ class _OlxCommunicationPlanScreenState extends State<OlxCommunicationPlanScreen>
     );
   }
 
-  // ========== CREATE BUTTON ==========
-  Widget _buildCreateButton() {
-    return AnimatedBuilder(
-      animation: _borderColorAnimation,
-      builder: (context, child) {
-        return Container(
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFF4158D0), Color(0xFFC850C0)],
-            ),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: _borderColorAnimation.value ?? const Color(0xFF4158D0),
-              width: 2,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: _borderColorAnimation.value?.withOpacity(0.5) ??
-                    Colors.transparent,
-                blurRadius: 8,
-                spreadRadius: 2,
-              ),
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required String label,
+    required IconData icon,
+    String? hint,
+    bool enabled = true,
+    bool isRequired = true,
+    int maxLines = 1,
+    TextInputType keyboardType = TextInputType.text,
+    List<TextInputFormatter>? inputFormatters,
+    String? Function(String?)? validator,
+  }) {
+    final errorColor = Theme.of(context).colorScheme.error;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text.rich(
+          TextSpan(
+            children: [
+              TextSpan(text: label),
+              if (isRequired)
+                TextSpan(text: ' *', style: TextStyle(color: errorColor))
+              else
+                const TextSpan(
+                  text: '  (optional)',
+                  style: TextStyle(
+                    color: _kFaint,
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
             ],
           ),
-          child: ElevatedButton.icon(
-            onPressed: _showCreateFormDialog,
-            icon: const Icon(Icons.add, size: 18),
-            label: const Text('Create Plan'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.transparent,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: _kInk,
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextFormField(
+          controller: controller,
+          maxLines: maxLines,
+          keyboardType: keyboardType,
+          inputFormatters: inputFormatters,
+          enabled: enabled,
+          style: const TextStyle(fontSize: 14, color: _kInk),
+          validator: validator,
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: const TextStyle(color: _kFaint, fontSize: 13.5),
+            prefixIcon:
+            maxLines > 1 ? null : Icon(icon, color: _kMuted, size: 20),
+            filled: true,
+            fillColor: _kCanvas,
+            contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: _kBorder),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: _kBorder),
+            ),
+            disabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: _kBorder),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: _kBrand, width: 1.6),
+            ),
+            errorBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: errorColor),
+            ),
+            focusedErrorBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: errorColor, width: 1.6),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ==================== PLAN DETAILS (READ-ONLY) ====================
+  Future<void> showDetailsPopup(
+      OlxCommunicationPlanData plan, Color accent, IconData icon) {
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        final isSmall = MediaQuery.of(ctx).size.width < 640;
+        return Dialog(
+          insetPadding: EdgeInsets.symmetric(
+            horizontal: isSmall ? 12 : 24,
+            vertical: 24,
+          ),
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
+          clipBehavior: Clip.antiAlias,
+          shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 480,
+              maxHeight: MediaQuery.of(ctx).size.height * 0.85,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 20, 12, 16),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: accent,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(icon, color: Colors.white, size: 22),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              plan.name,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.titleLarge?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: _kInk,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Communication plan #${plan.id}',
+                              style: const TextStyle(
+                                  color: _kMuted, fontSize: 13),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Close',
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        icon: const Icon(Icons.close_rounded, color: _kMuted),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1, color: _kBorder),
+                Flexible(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(24, 22, 24, 6),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _detailRow(
+                          Icons.payments_outlined,
+                          'Price',
+                          value: _formatPrice(plan.price, plan.currency),
+                        ),
+                        _detailRow(
+                          Icons.schedule_rounded,
+                          'Duration',
+                          value: _validityLabel(plan.durationDays),
+                        ),
+                        _detailRow(
+                          Icons.chat_bubble_outline_rounded,
+                          'Chat allowance',
+                          value: _allowanceLabel(plan.chatUnlimited,
+                              plan.chatLimit, plan.chatLimitPeriod, 'chats'),
+                        ),
+                        _detailRow(
+                          Icons.question_answer_outlined,
+                          'Enquiry allowance',
+                          value: _allowanceLabel(
+                              plan.enquiryUnlimited,
+                              plan.enquiryLimit,
+                              plan.enquiryLimitPeriod,
+                              'enquiries'),
+                        ),
+                        _detailRow(
+                          Icons.toggle_on_outlined,
+                          'Status',
+                          valueWidget: _StatusBadge(active: plan.isActive),
+                        ),
+                        _detailRow(
+                          Icons.notes_rounded,
+                          'Description',
+                          value: plan.description.trim().isEmpty
+                              ? 'No description provided'
+                              : plan.description.trim(),
+                        ),
+                        _detailRow(
+                          Icons.event_available_outlined,
+                          'Created',
+                          value: _formatDate(plan.createdAt),
+                        ),
+                        _detailRow(
+                          Icons.update_rounded,
+                          'Last updated',
+                          value: _formatDate(plan.updatedAt),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const Divider(height: 1, color: _kBorder),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 14, 24, 18),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.of(ctx).pop();
+                          _openPlanFormDialog(plan: plan);
+                        },
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _kBrand,
+                          side: const BorderSide(color: _kBorder),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 20, vertical: 16),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                        ),
+                        icon: const Icon(Icons.edit_outlined, size: 18),
+                        label: const Text('Edit'),
+                      ),
+                      const SizedBox(width: 12),
+                      FilledButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _kBrand,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 24, vertical: 16),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                        ),
+                        child: const Text('Close'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
         );
@@ -470,313 +1478,131 @@ class _OlxCommunicationPlanScreenState extends State<OlxCommunicationPlanScreen>
     );
   }
 
-  // ========== CREATE FORM DIALOG ==========
-  void _showCreateFormDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: true,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        backgroundColor: Colors.transparent,
-        child: _buildCreateForm(),
-      ),
+  Widget _buildSectionLabel(String text) {
+    return Row(
+      children: [
+        Text(
+          text,
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+            color: _kInk,
+          ),
+        ),
+        const SizedBox(width: 12),
+        const Expanded(child: Divider(height: 1, color: _kBorder)),
+      ],
     );
   }
 
-  Widget _buildCreateForm() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isMobile = MediaQuery.of(context).size.width < 600;
-
+  Widget _buildFormErrorBanner(String message) {
+    final errorColor = Theme.of(context).colorScheme.error;
     return Container(
-      width: isMobile ? MediaQuery.of(context).size.width * 0.95 : 700,
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.9,
-      ),
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF16213E) : Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
+        color: errorColor.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: errorColor.withOpacity(0.3)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.error_outline, color: errorColor, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(color: errorColor, fontSize: 13, height: 1.4),
+            ),
           ),
         ],
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(24),
-        child: _CreateCommunicationPlanFormContent(
-          onSuccess: () {
-            Navigator.pop(context);
-            _fetchPlans();
-          },
-        ),
-      ),
     );
   }
 
-  // ========== UPDATE FORM DIALOG ==========
-  void _showUpdateFormDialog(OlxCommunicationPlanData plan) {
-    showDialog(
-      context: context,
-      barrierDismissible: true,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        backgroundColor: Colors.transparent,
-        child: _buildUpdateForm(plan),
-      ),
-    );
-  }
-
-  Widget _buildUpdateForm(OlxCommunicationPlanData plan) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isMobile = MediaQuery.of(context).size.width < 600;
-
-    return Container(
-      width: isMobile ? MediaQuery.of(context).size.width * 0.95 : 700,
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.9,
-      ),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF16213E) : Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
+  Widget _detailRow(IconData icon, String label,
+      {String? value, Widget? valueWidget}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: _kCanvas,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _kBorder),
+            ),
+            child: Icon(icon, size: 18, color: _kMuted),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: _kMuted,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                valueWidget ??
+                    Text(
+                      value ?? '',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: _kInk,
+                        height: 1.45,
+                      ),
+                    ),
+              ],
+            ),
           ),
         ],
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(24),
-        child: _UpdateCommunicationPlanFormContent(
-          plan: plan,
-          onSuccess: () {
-            Navigator.pop(context);
-            _fetchPlans();
-          },
-        ),
-      ),
     );
   }
 
-  // ========== VIEW DETAILS POPUP ==========
-  void _showPlanPopup(OlxCommunicationPlanData plan) {
-    showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        backgroundColor: Colors.transparent,
+  // ==================== BUILD ====================
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _kCanvas,
+      body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
-            double dialogWidth = constraints.maxWidth * 0.9;
-            if (constraints.maxWidth > 600) dialogWidth = 600;
-            if (constraints.maxWidth > 800) dialogWidth = 700;
-            return Container(
-              width: dialogWidth,
-              constraints: BoxConstraints(
-                maxHeight: MediaQuery.of(context).size.height * 0.85,
+            final width = constraints.maxWidth;
+            final isMobile = width < 700;
+            final horizontalPadding = isMobile ? 16.0 : 32.0;
+            final contentWidth =
+            (width - horizontalPadding * 2).clamp(0.0, 1280.0).toDouble();
+
+            return SingleChildScrollView(
+              padding: EdgeInsets.symmetric(
+                horizontal: horizontalPadding,
+                vertical: isMobile ? 20 : 28,
               ),
-              decoration: BoxDecoration(
-                color: Theme.of(context).cardColor,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Header
-                  Container(
-                    padding: const EdgeInsets.fromLTRB(20, 16, 12, 12),
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [Color(0xFF4158D0), Color(0xFFC850C0)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      borderRadius: BorderRadius.only(
-                        topLeft: Radius.circular(20),
-                        topRight: Radius.circular(20),
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                plan.name,
-                                style: const TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                'Plan #${plan.id}',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.white.withOpacity(0.85),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        IconButton(
-                          onPressed: () => Navigator.pop(context),
-                          icon: const Icon(Icons.close, color: Colors.white),
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                          splashRadius: 24,
-                        ),
-                      ],
-                    ),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1280),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildPageHeader(contentWidth),
+                      const SizedBox(height: 22),
+                      _buildFilterSection(contentWidth),
+                      const SizedBox(height: 28),
+                      _buildPlansSection(contentWidth),
+                      const SizedBox(height: 8),
+                    ],
                   ),
-                  // Content
-                  Expanded(
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _buildDetailSection(
-                            context,
-                            title: 'Plan Info',
-                            icon: Icons.card_membership,
-                            child: Column(
-                              children: [
-                                _buildInfoChip("Price",
-                                    "${plan.currency} ${plan.price}", context, isHighlight: true),
-                                const SizedBox(height: 8),
-                                _buildInfoChip("Duration",
-                                    "${plan.durationDays} days", context),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          _buildDetailSection(
-                            context,
-                            title: 'Chat Settings',
-                            icon: Icons.chat_bubble_outline,
-                            child: Column(
-                              children: [
-                                _buildInfoChip(
-                                    "Chat Limit",
-                                    plan.chatUnlimited ? "Unlimited" : "${plan.chatLimit}",
-                                    context,
-                                    isHighlight: plan.chatUnlimited),
-                                const SizedBox(height: 8),
-                                _buildInfoChip("Period",
-                                    _periodLabel(plan.chatLimitPeriod), context),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          _buildDetailSection(
-                            context,
-                            title: 'Enquiry Settings',
-                            icon: Icons.question_answer_outlined,
-                            child: Column(
-                              children: [
-                                _buildInfoChip(
-                                    "Enquiry Limit",
-                                    plan.enquiryUnlimited ? "Unlimited" : "${plan.enquiryLimit}",
-                                    context,
-                                    isHighlight: plan.enquiryUnlimited),
-                                const SizedBox(height: 8),
-                                _buildInfoChip("Period",
-                                    _periodLabel(plan.enquiryLimitPeriod), context),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          _buildDetailSection(
-                            context,
-                            title: 'Description',
-                            icon: Icons.description_outlined,
-                            child: _buildInfoChip(
-                                "Description",
-                                plan.description.isEmpty ? 'No description' : plan.description,
-                                context),
-                          ),
-                          const SizedBox(height: 16),
-                          _buildDetailSection(
-                            context,
-                            title: 'Status',
-                            icon: Icons.toggle_on,
-                            child: _buildInfoChip(
-                                "Active Status",
-                                plan.isActive ? "Active" : "Inactive",
-                                context,
-                                isHighlight: plan.isActive),
-                          ),
-                          const SizedBox(height: 16),
-                          if (plan.createdAt != null)
-                            _buildDetailSection(
-                              context,
-                              title: 'Timestamps',
-                              icon: Icons.access_time,
-                              child: Column(
-                                children: [
-                                  _buildInfoChip("Created",
-                                      _formatDate(plan.createdAt), context),
-                                  const SizedBox(height: 8),
-                                  _buildInfoChip("Updated",
-                                      _formatDate(plan.updatedAt), context),
-                                ],
-                              ),
-                            ),
-                          const SizedBox(height: 20),
-                          // Action Buttons
-                          Row(
-                            children: [
-                              Expanded(
-                                child: ElevatedButton.icon(
-                                  onPressed: () {
-                                    Navigator.pop(context);
-                                    _showUpdateFormDialog(plan);
-                                  },
-                                  icon: const Icon(Icons.edit, size: 18),
-                                  label: const Text('Update'),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.blue,
-                                    foregroundColor: Colors.white,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    padding: const EdgeInsets.symmetric(vertical: 12),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: ElevatedButton.icon(
-                                  onPressed: () {
-                                    Navigator.pop(context);
-                                    _showDeleteConfirm(plan);
-                                  },
-                                  icon: const Icon(Icons.delete, size: 18),
-                                  label: const Text('Delete'),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: _kDanger,
-                                    foregroundColor: Colors.white,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    padding: const EdgeInsets.symmetric(vertical: 12),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
+                ),
               ),
             );
           },
@@ -785,2166 +1611,1218 @@ class _OlxCommunicationPlanScreenState extends State<OlxCommunicationPlanScreen>
     );
   }
 
-  Widget _buildDetailSection(BuildContext context, {
-    required String title,
-    required IconData icon,
-    required Widget child,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFF4158D0), Color(0xFFC850C0)],
+  int _columnsFor(double width) {
+    if (width >= 1080) return 3;
+    if (width >= 700) return 2;
+    return 1;
+  }
+
+  // ==================== PAGE HEADER ====================
+  Widget _buildExportIcons() {
+    Widget exportButton({
+      required String tooltip,
+      required VoidCallback onTap,
+      required String asset,
+      required Color tint,
+    }) {
+      return Tooltip(
+        message: tooltip,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: tint.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: tint.withOpacity(0.25)),
             ),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 16, color: Colors.white),
-              const SizedBox(width: 8),
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
-              ),
-            ],
+            child: Image.asset(asset, height: 20, width: 20),
           ),
         ),
-        const SizedBox(height: 12),
-        child,
+      );
+    }
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        exportButton(
+          tooltip: 'Export Excel',
+          onTap: exportExcel,
+          asset: 'assets/icon/xls.png',
+          tint: Colors.green,
+        ),
+        const SizedBox(width: 8),
+        exportButton(
+          tooltip: 'Export PDF',
+          onTap: exportPDF,
+          asset: 'assets/icon/pdf.png',
+          tint: Colors.red,
+        ),
+        const SizedBox(width: 8),
+        exportButton(
+          tooltip: 'Export DOC',
+          onTap: exportDOC,
+          asset: 'assets/icon/doc.png',
+          tint: Colors.blue,
+        ),
       ],
     );
   }
 
-  Widget _buildInfoChip(String label, String value, BuildContext context,
-      {bool isHighlight = false}) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: isHighlight
-            ? (isDark
-            ? const Color(0xFF4158D0).withOpacity(0.2)
-            : const Color(0xFF4158D0).withOpacity(0.1))
-            : (isDark ? const Color(0xFF374151) : const Color(0xFFF3F4F6)),
-        borderRadius: BorderRadius.circular(12),
-        border: isHighlight ? Border.all(color: const Color(0xFF4158D0)) : null,
+  Widget _buildPageHeader(double contentWidth) {
+    final theme = Theme.of(context);
+    final isCompact = contentWidth < 520;
+
+    final titleBlock = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Communication Plans',
+          style: theme.textTheme.headlineSmall?.copyWith(
+            color: _kInk,
+            fontWeight: FontWeight.w700,
+            letterSpacing: -0.3,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Manage chat and enquiry allowance plans for OLX',
+          style: theme.textTheme.bodyMedium?.copyWith(color: _kMuted),
+        ),
+      ],
+    );
+
+    // ✅ NEW: Settings button (popup उघडतो)
+    final settingsButton = OutlinedButton.icon(
+      onPressed: _openCommunicationSettingsPopup,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: _kBrand,
+        side: BorderSide(color: _kBrand.withOpacity(0.5)),
+        backgroundColor: _kBrand.withOpacity(0.06),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
       ),
-      child: Row(
+      icon: const Icon(Icons.settings_outlined, size: 18),
+      label: const Text('Settings'),
+    );
+
+    final createButton = FilledButton.icon(
+      onPressed: () => _openPlanFormDialog(),
+      style: FilledButton.styleFrom(
+        backgroundColor: _kBrand,
+        foregroundColor: Colors.white,
+        elevation: 2,
+        shadowColor: _kBrand.withOpacity(0.45),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+      ),
+      icon: const Icon(Icons.add_rounded, size: 20),
+      label: const Text('Create Plan'),
+    );
+
+    if (isCompact) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            "$label: ",
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              fontSize: 12,
-              color: isHighlight
-                  ? const Color(0xFF4158D0)
-                  : (isDark ? Colors.grey[400] : Colors.grey[700]),
-            ),
-          ),
-          Flexible(
-            child: Text(
-              value,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: isHighlight ? FontWeight.bold : FontWeight.normal,
-                color: isHighlight
-                    ? const Color(0xFF4158D0)
-                    : (isDark ? Colors.white70 : Colors.black87),
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
+          titleBlock,
+          const SizedBox(height: 16),
+          _buildExportIcons(),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(child: settingsButton),
+              const SizedBox(width: 12),
+              Expanded(child: createButton),
+            ],
           ),
         ],
+      );
+    }
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(child: titleBlock),
+        const SizedBox(width: 16),
+        _buildExportIcons(),
+        const SizedBox(width: 16),
+        settingsButton, // ✅ NEW
+        const SizedBox(width: 12),
+        createButton,
+      ],
+    );
+  }
+
+  // ==================== FILTER SECTION ====================
+  InputDecoration _filterDecoration({
+    required String label,
+    required IconData icon,
+    String? hint,
+  }) {
+    return InputDecoration(
+      labelText: label,
+      hintText: hint,
+      floatingLabelBehavior: FloatingLabelBehavior.always,
+      isDense: true,
+      labelStyle: const TextStyle(color: _kMuted, fontSize: 13),
+      hintStyle: const TextStyle(color: _kFaint, fontSize: 13.5),
+      prefixIcon: Icon(icon, size: 18, color: _kMuted),
+      prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+      filled: true,
+      fillColor: _kCanvas,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: _kBorder),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: _kBorder),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: _kBrand, width: 1.5),
       ),
     );
   }
 
-  // ========== DELETE CONFIRM ==========
-  Future<void> _showDeleteConfirm(OlxCommunicationPlanData plan) async {
-    return showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Delete Plan'),
-        content: Text('Are you sure you want to delete "${plan.name}"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _showSnackBar('Delete function not available yet', _kWarning);
-            },
-            style: TextButton.styleFrom(foregroundColor: _kDanger),
-            child: const Text('Delete'),
-          ),
-        ],
+  Widget _buildDropdown<T>({
+    required String label,
+    required IconData icon,
+    required T value,
+    required List<T> items,
+    required ValueChanged<T?> onChanged,
+  }) {
+    return InputDecorator(
+      decoration: _filterDecoration(label: label, icon: icon),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<T>(
+          value: value,
+          isExpanded: true,
+          isDense: true,
+          borderRadius: BorderRadius.circular(12),
+          dropdownColor: Colors.white,
+          icon: const Icon(Icons.keyboard_arrow_down_rounded,
+              size: 20, color: _kMuted),
+          style: const TextStyle(fontSize: 14, color: _kInk),
+          items: items
+              .map((e) => DropdownMenuItem<T>(
+            value: e,
+            child: Text('$e', overflow: TextOverflow.ellipsis),
+          ))
+              .toList(),
+          onChanged: onChanged,
+        ),
       ),
     );
   }
 
-  // ========== FILTER SECTION ==========
-  Widget _buildFilterSection(bool isDark, bool isMobile) {
+  Widget _buildFilterSection(double contentWidth) {
+    final isWide = contentWidth >= 1000;
+    final isMobile = contentWidth < 600;
+
+    final searchField = TextField(
+      controller: _searchController,
+      style: const TextStyle(fontSize: 14, color: _kInk),
+      decoration: _filterDecoration(
+        label: 'Search plans',
+        hint: 'Name or description',
+        icon: Icons.search_rounded,
+      ).copyWith(
+        suffixIcon: searchQuery.isNotEmpty
+            ? IconButton(
+          tooltip: 'Clear search',
+          icon: const Icon(Icons.close_rounded, size: 18),
+          onPressed: () {
+            _searchController.clear();
+            setState(() {
+              searchQuery = '';
+              currentPage = 1;
+              applyFilters();
+            });
+          },
+        )
+            : null,
+      ),
+      onChanged: (value) {
+        setState(() {
+          searchQuery = value;
+          currentPage = 1;
+          applyFilters();
+        });
+      },
+    );
+
+    final statusField = _buildDropdown<String>(
+      label: 'Status',
+      icon: Icons.toggle_on_outlined,
+      value: filterStatus,
+      items: _statusOptions,
+      onChanged: (v) {
+        if (v == null) return;
+        setState(() {
+          filterStatus = v;
+          currentPage = 1;
+          applyFilters();
+        });
+      },
+    );
+
+    final sortField = _buildDropdown<String>(
+      label: 'Sort by',
+      icon: Icons.sort_rounded,
+      value: sortOption,
+      items: _sortOptions,
+      onChanged: (v) {
+        if (v == null) return;
+        setState(() {
+          sortOption = v;
+          currentPage = 1;
+          applyFilters();
+        });
+      },
+    );
+
+    final perPageField = _buildDropdown<int>(
+      label: 'Per page',
+      icon: Icons.grid_view_rounded,
+      value: itemsPerPage,
+      items: rowsPerPageOptions,
+      onChanged: changeItemsPerPage,
+    );
+
+    final clearButton = OutlinedButton.icon(
+      onPressed: _hasActiveFilters ? resetFilters : null,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: _kBody,
+        side: const BorderSide(color: _kBorder),
+        minimumSize: const Size(0, 48),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      icon: const Icon(Icons.filter_alt_off_outlined, size: 18),
+      label: const Text('Clear filters'),
+    );
+
+    Widget body;
+    if (isWide) {
+      body = Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(child: searchField),
+          const SizedBox(width: 12),
+          SizedBox(width: 160, child: statusField),
+          const SizedBox(width: 12),
+          SizedBox(width: 210, child: sortField),
+          const SizedBox(width: 12),
+          SizedBox(width: 130, child: perPageField),
+          const SizedBox(width: 12),
+          clearButton,
+        ],
+      );
+    } else if (isMobile) {
+      body = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          searchField,
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(child: statusField),
+              const SizedBox(width: 12),
+              Expanded(child: perPageField),
+            ],
+          ),
+          const SizedBox(height: 12),
+          sortField,
+          const SizedBox(height: 12),
+          clearButton,
+        ],
+      );
+    } else {
+      body = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          searchField,
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(child: statusField),
+              const SizedBox(width: 12),
+              Expanded(flex: 2, child: sortField),
+              const SizedBox(width: 12),
+              Expanded(child: perPageField),
+              const SizedBox(width: 12),
+              clearButton,
+            ],
+          ),
+        ],
+      );
+    }
+
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: EdgeInsets.all(isMobile ? 14 : 16),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF16213E) : Colors.white,
+        color: Colors.white,
         borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _kBorder),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withOpacity(0.03),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
         ],
       ),
-      child: isMobile
-          ? Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 120,
-                height: 40,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: isDark
-                      ? const Color(0xFF1A1A2E)
-                      : const Color(0xFFF8FAFC),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                      color: isDark ? Colors.grey[700]! : Colors.grey.shade200),
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    value: _filterType,
-                    icon: const Icon(Icons.arrow_drop_down,
-                        color: Color(0xFF4158D0)),
-                    style: TextStyle(
-                        color: isDark ? Colors.white : const Color(0xFF1E293B),
-                        fontSize: 13),
-                    isExpanded: true,
-                    onChanged: (String? newValue) {
-                      setState(() {
-                        _filterType = newValue!;
-                        _currentPage = 1;
-                        _applyFilters();
-                      });
-                    },
-                    items: ['All', 'Active', 'Inactive']
-                        .map<DropdownMenuItem<String>>((String value) {
-                      return DropdownMenuItem<String>(
-                        value: value,
-                        child: Text(value),
-                      );
-                    }).toList(),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: isDark
-                        ? const Color(0xFF1A1A2E)
-                        : const Color(0xFFF8FAFC),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                        color:
-                        isDark ? Colors.grey[700]! : Colors.grey.shade200),
-                  ),
-                  child: TextField(
-                    controller: _searchController,
-                    style:
-                    TextStyle(color: isDark ? Colors.white : Colors.black),
-                    decoration: InputDecoration(
-                      hintText: "Search plans...",
-                      hintStyle: TextStyle(
-                          color:
-                          isDark ? Colors.grey[500] : Colors.grey[400]),
-                      prefixIcon: const Icon(Icons.search,
-                          size: 16, color: Color(0xFF4158D0)),
-                      border: InputBorder.none,
-                      contentPadding: const EdgeInsets.symmetric(vertical: 14),
-                      suffixIcon: _searchQuery.isNotEmpty
-                          ? IconButton(
-                        icon: const Icon(Icons.clear, size: 16),
-                        onPressed: () {
-                          _searchController.clear();
-                          setState(() {
-                            _searchQuery = '';
-                            _currentPage = 1;
-                            _applyFilters();
-                          });
-                        },
-                      )
-                          : null,
-                    ),
-                    onChanged: (value) {
-                      setState(() {
-                        _searchQuery = value;
-                        _currentPage = 1;
-                        _applyFilters();
-                      });
-                    },
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              _buildExportIcons(),
-              Row(
-                children: [
-                  Text(
-                    "Total: ${_filteredPlans.length}",
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: isDark ? Colors.grey[400] : Colors.grey,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    onPressed: _resetFilters,
-                    icon: const Icon(Icons.refresh),
-                    color: Colors.red,
-                    tooltip: "Reset",
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ],
-      )
-          : Row(
-        children: [
-          Container(
-            width: 140,
-            height: 40,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF1A1A2E) : const Color(0xFFF8FAFC),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                  color: isDark ? Colors.grey[700]! : Colors.grey.shade200),
-            ),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<String>(
-                value: _filterType,
-                icon: const Icon(Icons.arrow_drop_down,
-                    color: Color(0xFF4158D0)),
-                style: TextStyle(
-                    color: isDark ? Colors.white : const Color(0xFF1E293B),
-                    fontSize: 13),
-                isExpanded: true,
-                onChanged: (String? newValue) {
-                  setState(() {
-                    _filterType = newValue!;
-                    _currentPage = 1;
-                    _applyFilters();
-                  });
-                },
-                items: ['All', 'Active', 'Inactive']
-                    .map<DropdownMenuItem<String>>((String value) {
-                  return DropdownMenuItem<String>(
-                    value: value,
-                    child: Text(value),
-                  );
-                }).toList(),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF1A1A2E) : const Color(0xFFF8FAFC),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                    color: isDark ? Colors.grey[700]! : Colors.grey.shade200),
-              ),
-              child: TextField(
-                controller: _searchController,
-                style: TextStyle(color: isDark ? Colors.white : Colors.black),
-                decoration: InputDecoration(
-                  hintText: "Search plans...",
-                  hintStyle: TextStyle(
-                      color: isDark ? Colors.grey[500] : Colors.grey[400]),
-                  prefixIcon: const Icon(Icons.search,
-                      size: 16, color: Color(0xFF4158D0)),
-                  border: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 14),
-                  suffixIcon: _searchQuery.isNotEmpty
-                      ? IconButton(
-                    icon: const Icon(Icons.clear, size: 16),
-                    onPressed: () {
-                      _searchController.clear();
-                      setState(() {
-                        _searchQuery = '';
-                        _currentPage = 1;
-                        _applyFilters();
-                      });
-                    },
-                  )
-                      : null,
-                ),
-                onChanged: (value) {
-                  setState(() {
-                    _searchQuery = value;
-                    _currentPage = 1;
-                    _applyFilters();
-                  });
-                },
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          _buildExportIcons(),
-          const SizedBox(width: 12),
-          Text(
-            "Total: ${_filteredPlans.length}",
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              color: isDark ? Colors.grey[400] : Colors.grey,
-            ),
-          ),
-          const SizedBox(width: 8),
-          IconButton(
-            onPressed: _resetFilters,
-            icon: const Icon(Icons.refresh),
-            color: Colors.red,
-            tooltip: "Reset",
-          ),
-        ],
-      ),
+      child: body,
     );
   }
 
-  // ========== TABLE CELLS ==========
-  Widget _tableHeader(String text, bool isDark) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-      child: Text(
-        text,
-        textAlign: TextAlign.center,
-        style: TextStyle(
-          fontWeight: FontWeight.bold,
-          fontSize: 11,
-          color: isDark ? Colors.white : const Color(0xFF1E293B),
+  // ==================== PLANS SECTION (CARDS) ====================
+  Widget _buildPlansSection(double contentWidth) {
+    final columns = _columnsFor(contentWidth);
+
+    if (_isLoading) {
+      return _PlanSkeletonRow(columns: columns);
+    }
+
+    if (_loadError != null && allPlans.isEmpty) {
+      return _StateCard(
+        icon: Icons.cloud_off_outlined,
+        iconColor: Theme.of(context).colorScheme.error,
+        title: 'Unable to load plans',
+        message: _loadError!,
+        action: OutlinedButton.icon(
+          onPressed: loadPlans,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: _kBrand,
+            side: const BorderSide(color: _kBorder),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+          icon: const Icon(Icons.refresh_rounded, size: 18),
+          label: const Text('Try again'),
         ),
-      ),
-    );
-  }
+      );
+    }
 
-  Widget _tableCell(String text,
-      {VoidCallback? onTap, bool isBold = false, Color? textColor}) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 52,
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-        alignment: Alignment.center,
-        child: Text(
-          text,
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
-            fontSize: 11,
-            color: textColor,
+    if (filteredPlans.isEmpty) {
+      final noData = allPlans.isEmpty;
+      return _StateCard(
+        icon: noData ? Icons.inventory_2_outlined : Icons.search_off_rounded,
+        iconColor: _kBrand,
+        title: 'No plans found',
+        message: noData
+            ? 'Create your first communication plan to get started.'
+            : 'No plans match your search or filters. Change the filters or clear them to see all plans.',
+        action: noData
+            ? FilledButton.icon(
+          onPressed: () => _openPlanFormDialog(),
+          style: FilledButton.styleFrom(
+            backgroundColor: _kBrand,
+            foregroundColor: Colors.white,
+            padding:
+            const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10)),
           ),
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
+          icon: const Icon(Icons.add_rounded, size: 18),
+          label: const Text('Create Plan'),
+        )
+            : OutlinedButton.icon(
+          onPressed: resetFilters,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: _kBody,
+            side: const BorderSide(color: _kBorder),
+            padding:
+            const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10)),
+          ),
+          icon: const Icon(Icons.filter_alt_off_outlined, size: 18),
+          label: const Text('Clear filters'),
         ),
-      ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildResultsBar(),
+        const SizedBox(height: 18),
+        _PlanCardsGrid(
+          plans: paginatedPlans,
+          columns: columns,
+          accentColors: _cardAccents,
+          icons: _cardIcons,
+          onView: showDetailsPopup,
+          onEdit: (plan) => _openPlanFormDialog(plan: plan),
+        ),
+        const SizedBox(height: 28),
+        _buildPagination(),
+      ],
     );
   }
 
-  Widget _statusCell(bool isActive, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 52,
-        alignment: Alignment.center,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+  Widget _buildResultsBar() {
+    return Row(
+      children: [
+        Text(
+          'All plans',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+            color: _kInk,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
           decoration: BoxDecoration(
-            color: isActive
-                ? const Color(0xFFDCFCE7)
-                : const Color(0xFFFEE2E2),
+            color: _kBrand.withOpacity(0.1),
             borderRadius: BorderRadius.circular(20),
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                isActive ? Icons.check_circle : Icons.cancel,
-                size: 12,
-                color: isActive
-                    ? const Color(0xFF15803D)
-                    : const Color(0xFFB91C1C),
-              ),
-              const SizedBox(width: 4),
-              Text(
-                isActive ? "Active" : "Inactive",
-                style: TextStyle(
-                  color: isActive
-                      ? const Color(0xFF15803D)
-                      : const Color(0xFFB91C1C),
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ========== PAGINATION ==========
-  Widget _buildPagination(bool isDark) {
-    if (_filteredPlans.isEmpty) return const SizedBox.shrink();
-    final isMobile = MediaQuery.of(context).size.width < 700;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1A1A2E) : const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: isMobile
-          ? Column(
-        children: [
-          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Text("Show ",
-                style: TextStyle(
-                    color: isDark ? Colors.white70 : Colors.black54,
-                    fontSize: 12)),
-            Container(
-              height: 32,
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF16213E) : Colors.white,
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(
-                    color:
-                    isDark ? Colors.grey[700]! : Colors.grey.shade300),
-              ),
-              child: DropdownButton<int>(
-                value: _itemsPerPage,
-                underline: const SizedBox(),
-                icon: const Icon(Icons.arrow_drop_down, size: 18),
-                style: TextStyle(
-                    color: isDark ? Colors.white : Colors.black, fontSize: 12),
-                items: _rowsPerPageOptions
-                    .map((e) =>
-                    DropdownMenuItem(value: e, child: Text(e.toString())))
-                    .toList(),
-                onChanged: _changeItemsPerPage,
-                dropdownColor:
-                isDark ? const Color(0xFF16213E) : Colors.white,
-              ),
-            ),
-            Text(" entries",
-                style: TextStyle(
-                    color: isDark ? Colors.white70 : Colors.black54,
-                    fontSize: 12)),
-          ]),
-          const SizedBox(height: 4),
-          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            _compactPageButton(
-                icon: Icons.chevron_left,
-                onTap: _currentPage > 1 ? _previousPage : null,
-                isDark: isDark),
-            if (_totalPages <= 5)
-              ...List.generate(
-                  _totalPages, (i) => _compactPageNumber(i + 1, isDark))
-            else if (_currentPage <= 3)
-              ...[
-                ...List.generate(
-                    4, (i) => _compactPageNumber(i + 1, isDark)),
-                Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 2),
-                    child: Text("...",
-                        style: TextStyle(
-                            color: isDark
-                                ? Colors.grey[400]
-                                : Colors.grey))),
-                _compactPageNumber(_totalPages, isDark),
-              ]
-            else if (_currentPage >= _totalPages - 2)
-                ...[
-                  _compactPageNumber(1, isDark),
-                  Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 2),
-                      child: Text("...",
-                          style: TextStyle(
-                              color: isDark
-                                  ? Colors.grey[400]
-                                  : Colors.grey))),
-                  ...List.generate(4,
-                          (i) => _compactPageNumber(_totalPages - 3 + i, isDark)),
-                ]
-              else
-                ...[
-                  _compactPageNumber(1, isDark),
-                  Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 2),
-                      child: Text("...",
-                          style: TextStyle(
-                              color: isDark
-                                  ? Colors.grey[400]
-                                  : Colors.grey))),
-                  _compactPageNumber(_currentPage - 1, isDark),
-                  _compactPageNumber(_currentPage, isDark),
-                  _compactPageNumber(_currentPage + 1, isDark),
-                  Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 2),
-                      child: Text("...",
-                          style: TextStyle(
-                              color: isDark
-                                  ? Colors.grey[400]
-                                  : Colors.grey))),
-                  _compactPageNumber(_totalPages, isDark),
-                ],
-            _compactPageButton(
-                icon: Icons.chevron_right,
-                onTap: _currentPage < _totalPages ? _nextPage : null,
-                isDark: isDark),
-          ]),
-        ],
-      )
-          : Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Row(
-            children: [
-              Text("Show ",
-                  style: TextStyle(
-                      color: isDark ? Colors.white70 : Colors.black54,
-                      fontSize: 12)),
-              Container(
-                height: 32,
-                padding: const EdgeInsets.symmetric(horizontal: 6),
-                decoration: BoxDecoration(
-                  color: isDark ? const Color(0xFF16213E) : Colors.white,
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(
-                      color:
-                      isDark ? Colors.grey[700]! : Colors.grey.shade300),
-                ),
-                child: DropdownButton<int>(
-                  value: _itemsPerPage,
-                  underline: const SizedBox(),
-                  icon: const Icon(Icons.arrow_drop_down, size: 18),
-                  style: TextStyle(
-                      color: isDark ? Colors.white : Colors.black,
-                      fontSize: 12),
-                  items: _rowsPerPageOptions
-                      .map((e) =>
-                      DropdownMenuItem(value: e, child: Text(e.toString())))
-                      .toList(),
-                  onChanged: _changeItemsPerPage,
-                  dropdownColor:
-                  isDark ? const Color(0xFF16213E) : Colors.white,
-                ),
-              ),
-              Text(" entries",
-                  style: TextStyle(
-                      color: isDark ? Colors.white70 : Colors.black54,
-                      fontSize: 12)),
-              const SizedBox(width: 12),
-              Text(
-                "Showing ${(_currentPage - 1) * _itemsPerPage + 1} to ${_currentPage * _itemsPerPage > _filteredPlans.length ? _filteredPlans.length : _currentPage * _itemsPerPage} of ${_filteredPlans.length}",
-                style: TextStyle(
-                    fontSize: 11,
-                    color: isDark ? Colors.grey[400] : Colors.grey),
-              ),
-            ],
-          ),
-          Row(
-            children: [
-              _compactPageButton(
-                  icon: Icons.chevron_left,
-                  onTap: _currentPage > 1 ? _previousPage : null,
-                  isDark: isDark),
-              if (_totalPages <= 5)
-                ...List.generate(
-                    _totalPages, (i) => _compactPageNumber(i + 1, isDark))
-              else if (_currentPage <= 3)
-                ...[
-                  ...List.generate(
-                      4, (i) => _compactPageNumber(i + 1, isDark)),
-                  Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 2),
-                      child: Text("...",
-                          style: TextStyle(
-                              color: isDark
-                                  ? Colors.grey[400]
-                                  : Colors.grey))),
-                  _compactPageNumber(_totalPages, isDark),
-                ]
-              else if (_currentPage >= _totalPages - 2)
-                  ...[
-                    _compactPageNumber(1, isDark),
-                    Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 2),
-                        child: Text("...",
-                            style: TextStyle(
-                                color: isDark
-                                    ? Colors.grey[400]
-                                    : Colors.grey))),
-                    ...List.generate(
-                        4, (i) => _compactPageNumber(_totalPages - 3 + i, isDark)),
-                  ]
-                else
-                  ...[
-                    _compactPageNumber(1, isDark),
-                    Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 2),
-                        child: Text("...",
-                            style: TextStyle(
-                                color: isDark
-                                    ? Colors.grey[400]
-                                    : Colors.grey))),
-                    _compactPageNumber(_currentPage - 1, isDark),
-                    _compactPageNumber(_currentPage, isDark),
-                    _compactPageNumber(_currentPage + 1, isDark),
-                    Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 2),
-                        child: Text("...",
-                            style: TextStyle(
-                                color: isDark
-                                    ? Colors.grey[400]
-                                    : Colors.grey))),
-                    _compactPageNumber(_totalPages, isDark),
-                  ],
-              _compactPageButton(
-                  icon: Icons.chevron_right,
-                  onTap: _currentPage < _totalPages ? _nextPage : null,
-                  isDark: isDark),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _compactPageButton(
-      {required IconData icon,
-        required VoidCallback? onTap,
-        required bool isDark}) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 2),
-      decoration: BoxDecoration(
-        border: Border.all(
-            color: isDark ? Colors.grey[700]! : Colors.grey.shade300),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: IconButton(
-        icon: Icon(icon, size: 16),
-        onPressed: onTap,
-        color: onTap != null
-            ? const Color(0xFF4158D0)
-            : (isDark ? Colors.grey[600] : Colors.grey),
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-      ),
-    );
-  }
-
-  Widget _compactPageNumber(int pageNum, bool isDark) {
-    final isSelected = _currentPage == pageNum;
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 2),
-      decoration: BoxDecoration(
-        color: isSelected ? const Color(0xFF4158D0) : Colors.transparent,
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: InkWell(
-        onTap: () => _goToPage(pageNum),
-        borderRadius: BorderRadius.circular(6),
-        child: Container(
-          width: 28,
-          height: 28,
-          alignment: Alignment.center,
           child: Text(
-            pageNum.toString(),
-            style: TextStyle(
-              color: isSelected
-                  ? Colors.white
-                  : (isDark ? Colors.white : const Color(0xFF1E293B)),
-              fontWeight: FontWeight.w600,
-              fontSize: 11,
+            '${filteredPlans.length}',
+            style: const TextStyle(
+              color: Color(0xFF4338CA),
+              fontWeight: FontWeight.w700,
+              fontSize: 12.5,
             ),
           ),
+        ),
+        if (_hasActiveFilters) ...[
+          const SizedBox(width: 10),
+          Flexible(
+            child: Text(
+              'filtered from ${allPlans.length}',
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: _kMuted, fontSize: 13),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  // ==================== PAGINATION ====================
+  Widget _buildPagination() {
+    final total = filteredPlans.length;
+    final start = total == 0 ? 0 : (currentPage - 1) * itemsPerPage + 1;
+    final end = currentPage * itemsPerPage > total
+        ? total
+        : currentPage * itemsPerPage;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _kBorder),
+      ),
+      child: Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 12,
+        runSpacing: 12,
+        children: [
+          Text.rich(
+            TextSpan(
+              children: [
+                const TextSpan(text: 'Showing '),
+                TextSpan(
+                  text: '$start–$end',
+                  style: const TextStyle(
+                      color: _kInk, fontWeight: FontWeight.w600),
+                ),
+                const TextSpan(text: ' of '),
+                TextSpan(
+                  text: '$total',
+                  style: const TextStyle(
+                      color: _kInk, fontWeight: FontWeight.w600),
+                ),
+                TextSpan(text: total == 1 ? ' plan' : ' plans'),
+              ],
+            ),
+            style: const TextStyle(fontSize: 13, color: _kMuted),
+          ),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _buildPageButtonPrevNext(prev: true),
+              ..._buildPageNumbers(),
+              _buildPageButtonPrevNext(prev: false),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _buildPageNumbers() {
+    if (totalPages <= 5) {
+      return List.generate(totalPages, (index) => _buildPageButton(index + 1));
+    } else if (currentPage <= 3) {
+      return [
+        ...List.generate(4, (index) => _buildPageButton(index + 1)),
+        _buildEllipsis(),
+        _buildPageButton(totalPages),
+      ];
+    } else if (currentPage >= totalPages - 2) {
+      return [
+        _buildPageButton(1),
+        _buildEllipsis(),
+        ...List.generate(
+            4, (index) => _buildPageButton(totalPages - 3 + index)),
+      ];
+    } else {
+      return [
+        _buildPageButton(1),
+        _buildEllipsis(),
+        _buildPageButton(currentPage - 1),
+        _buildPageButton(currentPage),
+        _buildPageButton(currentPage + 1),
+        _buildEllipsis(),
+        _buildPageButton(totalPages),
+      ];
+    }
+  }
+
+  Widget _buildPageButtonPrevNext({required bool prev}) {
+    final enabled = prev ? currentPage > 1 : currentPage < totalPages;
+    return SizedBox(
+      width: 36,
+      height: 36,
+      child: IconButton(
+        tooltip: prev ? 'Previous page' : 'Next page',
+        icon: Icon(
+          prev ? Icons.chevron_left_rounded : Icons.chevron_right_rounded,
+          size: 20,
+        ),
+        onPressed: enabled ? (prev ? previousPage : nextPage) : null,
+        color: _kBrand,
+        disabledColor: _kFaint,
+        padding: EdgeInsets.zero,
+        style: IconButton.styleFrom(
+          side: const BorderSide(color: _kBorder),
+          shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
       ),
     );
   }
 
-  // ========== MAIN BUILD ==========
+  Widget _buildPageButton(int pageNum) {
+    final selected = currentPage == pageNum;
+    final shape =
+    RoundedRectangleBorder(borderRadius: BorderRadius.circular(8));
+    return SizedBox(
+      width: 36,
+      height: 36,
+      child: selected
+          ? FilledButton(
+        onPressed: () => goToPage(pageNum),
+        style: FilledButton.styleFrom(
+          backgroundColor: _kBrand,
+          foregroundColor: Colors.white,
+          padding: EdgeInsets.zero,
+          minimumSize: const Size(36, 36),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          shape: shape,
+        ),
+        child: Text(
+          '$pageNum',
+          style:
+          const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+        ),
+      )
+          : TextButton(
+        onPressed: () => goToPage(pageNum),
+        style: TextButton.styleFrom(
+          foregroundColor: _kInk,
+          padding: EdgeInsets.zero,
+          minimumSize: const Size(36, 36),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          shape: shape,
+        ),
+        child: Text(
+          '$pageNum',
+          style:
+          const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEllipsis() {
+    return const SizedBox(
+      width: 20,
+      height: 36,
+      child: Center(
+        child: Text(
+          '...',
+          style: TextStyle(fontSize: 13, color: _kMuted),
+        ),
+      ),
+    );
+  }
+}
+
+// ==================== STATUS BADGE ====================
+class _StatusBadge extends StatelessWidget {
+  final bool active;
+
+  const _StatusBadge({required this.active});
+
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isMobile = MediaQuery.of(context).size.width < 600;
-
-    return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF1A1A2E) : const Color(0xFFF5F7FA),
-      appBar: AppBar(
-        backgroundColor: isDark ? const Color(0xFF16213E) : Colors.white,
-        foregroundColor: isDark ? Colors.white : Colors.black,
-        elevation: 0,
-        title: const Text(
-          "OLX Communication Plans",
-          style: TextStyle(fontWeight: FontWeight.w600),
-        ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 16),
-            child: _buildCreateButton(),
+    final dot = active ? _kSuccess : _kFaint;
+    final text = active ? const Color(0xFF047857) : _kBody;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: (active ? _kSuccess : _kMuted).withOpacity(0.12),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            active ? 'Active' : 'Inactive',
+            style: TextStyle(
+              color: text,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          children: [
-            _buildFilterSection(isDark, isMobile),
-            const SizedBox(height: 8),
-            Expanded(
-              child: Column(
-                children: [
-                  // Fixed header
-                  Container(
-                    decoration: BoxDecoration(
-                      color: isDark
-                          ? const Color(0xFF1A1A2E)
-                          : const Color(0xFFE2E8F0),
-                      borderRadius: const BorderRadius.vertical(
-                          top: Radius.circular(12)),
-                      border: Border.all(
-                          color: isDark
-                              ? Colors.grey[700]!
-                              : Colors.grey.shade300),
-                    ),
-                    child: SingleChildScrollView(
-                      controller: _headerHorizontalController,
-                      scrollDirection: Axis.horizontal,
-                      child: Table(
-                        border: TableBorder(
-                          horizontalInside: BorderSide(
-                              color: isDark
-                                  ? Colors.grey[700]!
-                                  : Colors.grey.shade300),
-                          verticalInside: BorderSide(
-                              color: isDark
-                                  ? Colors.grey[700]!
-                                  : Colors.grey.shade300),
-                          top: BorderSide(
-                              color: isDark
-                                  ? Colors.grey[700]!
-                                  : Colors.grey.shade300),
-                          bottom: BorderSide(
-                              color: isDark
-                                  ? Colors.grey[700]!
-                                  : Colors.grey.shade300),
-                        ),
-                        columnWidths: _columnWidths,
-                        children: [
-                          TableRow(
-                            children: _headerLabels
-                                .map((label) => _tableHeader(label, isDark))
-                                .toList(),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  // Scrollable rows
-                  Expanded(
-                    child: _filteredPlans.isEmpty
-                        ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.card_membership,
-                              size: 64, color: Colors.grey[400]),
-                          const SizedBox(height: 16),
-                          Text(
-                            'No communication plans found',
-                            style: TextStyle(
-                                color: isDark
-                                    ? Colors.grey[400]
-                                    : Colors.grey[600]),
-                          ),
-                          if (_searchQuery.isNotEmpty)
-                            TextButton(
-                              onPressed: _resetFilters,
-                              child: const Text('Clear Search'),
-                            ),
-                        ],
-                      ),
-                    )
-                        : SingleChildScrollView(
-                      controller: _verticalController,
-                      child: SingleChildScrollView(
-                        controller: _rowsHorizontalController,
-                        scrollDirection: Axis.horizontal,
-                        child: Table(
-                          border: TableBorder.all(
-                            color: isDark
-                                ? Colors.grey[700]!
-                                : Colors.grey.shade300,
-                            width: 1,
-                          ),
-                          columnWidths: _columnWidths,
-                          children: List.generate(
-                            _paginatedPlans.length,
-                                (rowIndex) {
-                              final plan = _paginatedPlans[rowIndex];
-                              final isEven = rowIndex % 2 == 0;
-                              final srNo = (_currentPage - 1) * _itemsPerPage +
-                                  rowIndex +
-                                  1;
+    );
+  }
+}
 
-                              return TableRow(
-                                decoration: BoxDecoration(
-                                  color: isEven
-                                      ? (isDark
-                                      ? const Color(0xFF1A1A2E)
-                                      : Colors.white)
-                                      : (isDark
-                                      ? const Color(0xFF16213E)
-                                      : const Color(0xFFF8FAFC)),
-                                ),
-                                children: [
-                                  _tableCell(
-                                    srNo.toString(),
-                                    onTap: () => _showPlanPopup(plan),
-                                    isBold: true,
-                                    textColor: const Color(0xFF4158D0),
-                                  ),
-                                  _tableCell(
-                                    plan.name,
-                                    onTap: () => _showPlanPopup(plan),
-                                    isBold: true,
-                                  ),
-                                  _tableCell(
-                                    "${plan.currency} ${plan.price}",
-                                    onTap: () => _showPlanPopup(plan),
-                                    isBold: true,
-                                    textColor: const Color(0xFF15803D),
-                                  ),
-                                  _tableCell(
-                                    "${plan.durationDays} days",
-                                    onTap: () => _showPlanPopup(plan),
-                                  ),
-                                  _tableCell(
-                                    plan.chatUnlimited
-                                        ? "Unlimited"
-                                        : "${plan.chatLimit} / ${_periodLabel(plan.chatLimitPeriod)}",
-                                    onTap: () => _showPlanPopup(plan),
-                                    textColor: const Color(0xFF1E40AF),
-                                  ),
-                                  _tableCell(
-                                    plan.enquiryUnlimited
-                                        ? "Unlimited"
-                                        : "${plan.enquiryLimit} / ${_periodLabel(plan.enquiryLimitPeriod)}",
-                                    onTap: () => _showPlanPopup(plan),
-                                    textColor: const Color(0xFF6B21A8),
-                                  ),
-                                  _statusCell(
-                                      plan.isActive, () => _showPlanPopup(plan)),
-                                  Container(
-                                    height: 52,
-                                    padding: const EdgeInsets.all(4),
-                                    child: Center(
-                                      child: IconButton(
-                                        icon: const Icon(Icons.visibility,
-                                            color: Color(0xFF4158D0),
-                                            size: 18),
-                                        onPressed: () => _showPlanPopup(plan),
-                                        tooltip: 'View Details',
-                                        padding: EdgeInsets.zero,
-                                        constraints: const BoxConstraints(
-                                            minWidth: 28, minHeight: 28),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
+// ==================== EMPTY / ERROR STATE CARD ====================
+class _StateCard extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final String title;
+  final String message;
+  final Widget? action;
+
+  const _StateCard({
+    required this.icon,
+    required this.iconColor,
+    required this.title,
+    required this.message,
+    this.action,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 56),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _kBorder),
+      ),
+      child: Column(
+        children: [
+          Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              color: iconColor.withOpacity(0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, size: 34, color: iconColor),
+          ),
+          const SizedBox(height: 18),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: _kInk,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Text(
+              message,
+              textAlign: TextAlign.center,
+              style:
+              const TextStyle(color: _kMuted, fontSize: 13.5, height: 1.5),
+            ),
+          ),
+          if (action != null) ...[
+            const SizedBox(height: 22),
+            action!,
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ==================== LOADING SKELETON ====================
+class _PlanSkeletonRow extends StatefulWidget {
+  final int columns;
+
+  const _PlanSkeletonRow({required this.columns});
+
+  @override
+  State<_PlanSkeletonRow> createState() => _PlanSkeletonRowState();
+}
+
+class _PlanSkeletonRowState extends State<_PlanSkeletonRow>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1000),
+  )..repeat(reverse: true);
+
+  late final Animation<double> _opacity = Tween<double>(begin: 0.45, end: 1.0)
+      .animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Widget _bar({double? width, required double height}) {
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: _kBorder,
+        borderRadius: BorderRadius.circular(6),
+      ),
+    );
+  }
+
+  Widget _skeletonCard() {
+    return Container(
+      height: 380,
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: _kBorder),
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(44),
+          topRight: Radius.circular(6),
+          bottomLeft: Radius.circular(6),
+          bottomRight: Radius.circular(44),
+        ),
+      ),
+      child: Column(
+        children: [
+          Align(
+            alignment: Alignment.centerRight,
+            child: _bar(width: 60, height: 20),
+          ),
+          const SizedBox(height: 16),
+          _bar(width: 120, height: 38),
+          const SizedBox(height: 10),
+          _bar(width: 80, height: 10),
+          const SizedBox(height: 28),
+          _bar(height: 10),
+          const SizedBox(height: 18),
+          _bar(height: 10),
+          const SizedBox(height: 18),
+          _bar(height: 10),
+          const Spacer(),
+          Container(
+            width: 56,
+            height: 56,
+            decoration:
+            const BoxDecoration(color: _kBorder, shape: BoxShape.circle),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final children = <Widget>[];
+    for (var i = 0; i < widget.columns; i++) {
+      if (i > 0) children.add(const SizedBox(width: 20));
+      children.add(Expanded(child: _skeletonCard()));
+    }
+    return FadeTransition(
+      opacity: _opacity,
+      child: Row(children: children),
+    );
+  }
+}
+
+// ==================== PLAN CARDS GRID (RESPONSIVE, EQUAL-HEIGHT ROWS) ====================
+class _PlanCardsGrid extends StatelessWidget {
+  final List<OlxCommunicationPlanData> plans;
+  final int columns;
+  final List<Color> accentColors;
+  final List<IconData> icons;
+  final void Function(
+      OlxCommunicationPlanData plan, Color accent, IconData icon) onView;
+  final void Function(OlxCommunicationPlanData plan) onEdit;
+
+  const _PlanCardsGrid({
+    required this.plans,
+    required this.columns,
+    required this.accentColors,
+    required this.icons,
+    required this.onView,
+    required this.onEdit,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    const spacing = 22.0;
+    final rows = <Widget>[];
+
+    for (var start = 0; start < plans.length; start += columns) {
+      final rowChildren = <Widget>[];
+      for (var c = 0; c < columns; c++) {
+        if (c > 0) rowChildren.add(const SizedBox(width: spacing));
+        final index = start + c;
+        if (index < plans.length) {
+          final plan = plans[index];
+          // Keep accent stable per plan id for a consistent identity.
+          final accentIndex = plan.id.abs() % accentColors.length;
+          final accent = accentColors[accentIndex];
+          final icon = icons[accentIndex % icons.length];
+          rowChildren.add(
+            Expanded(
+              child: _PremiumPlanCard(
+                plan: plan,
+                accent: accent,
+                icon: icon,
+                onView: () => onView(plan, accent, icon),
+                onEdit: () => onEdit(plan),
               ),
             ),
-            const SizedBox(height: 8),
-            _buildPagination(isDark),
+          );
+        } else {
+          rowChildren.add(const Expanded(child: SizedBox.shrink()));
+        }
+      }
+      if (rows.isNotEmpty) rows.add(const SizedBox(height: spacing));
+      rows.add(
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: rowChildren,
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: rows,
+    );
+  }
+}
+
+// ==================== PREMIUM PLAN CARD ====================
+class _PremiumPlanCard extends StatefulWidget {
+  final OlxCommunicationPlanData plan;
+  final Color accent;
+  final IconData icon;
+  final VoidCallback onView;
+  final VoidCallback onEdit;
+
+  const _PremiumPlanCard({
+    required this.plan,
+    required this.accent,
+    required this.icon,
+    required this.onView,
+    required this.onEdit,
+  });
+
+  @override
+  State<_PremiumPlanCard> createState() => _PremiumPlanCardState();
+}
+
+class _PremiumPlanCardState extends State<_PremiumPlanCard> {
+  bool _hovering = false;
+
+  static const BorderRadius _outerRadius = BorderRadius.only(
+    topLeft: Radius.circular(44),
+    topRight: Radius.circular(6),
+    bottomLeft: Radius.circular(6),
+    bottomRight: Radius.circular(44),
+  );
+
+  static const BorderRadius _innerRadius = BorderRadius.only(
+    topLeft: Radius.circular(34),
+    topRight: Radius.circular(4),
+    bottomLeft: Radius.circular(4),
+    bottomRight: Radius.circular(34),
+  );
+
+  Widget _featureLine(String text, {bool muted = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 9),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 1),
+            child: Icon(Icons.check_rounded, size: 16, color: widget.accent),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.4,
+                color: muted ? _kFaint : _kBody,
+                fontStyle: muted ? FontStyle.italic : FontStyle.normal,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _dashedDivider() {
+    return const SizedBox(
+      height: 1,
+      width: double.infinity,
+      child: CustomPaint(painter: _DashedLinePainter(Color(0xFFCBD5E1))),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final plan = widget.plan;
+    final accent = widget.accent;
+    final ring = Color.lerp(accent, Colors.black, 0.25)!;
+    final description = plan.description.trim();
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovering = true),
+      onExit: (_) => setState(() => _hovering = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        transform: Matrix4.translationValues(0, _hovering ? -4 : 0, 0),
+        decoration: BoxDecoration(
+          borderRadius: _outerRadius,
+          boxShadow: [
+            BoxShadow(
+              color: accent.withOpacity(_hovering ? 0.30 : 0.16),
+              blurRadius: _hovering ? 28 : 16,
+              offset: Offset(0, _hovering ? 14 : 8),
+            ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-// ============================================================================
-// ==================== CREATE FORM CONTENT ===================================
-// ============================================================================
-class _CreateCommunicationPlanFormContent extends StatefulWidget {
-  final VoidCallback onSuccess;
-
-  const _CreateCommunicationPlanFormContent({
-    Key? key,
-    required this.onSuccess,
-  }) : super(key: key);
-
-  @override
-  State<_CreateCommunicationPlanFormContent> createState() =>
-      _CreateCommunicationPlanFormContentState();
-}
-
-class _CreateCommunicationPlanFormContentState
-    extends State<_CreateCommunicationPlanFormContent> {
-  final _formKey = GlobalKey<FormState>();
-  final OlxCommunicationPlanService _service = OlxCommunicationPlanService();
-
-  final _nameController = TextEditingController();
-  final _descriptionController = TextEditingController();
-  final _priceController = TextEditingController();
-  final _durationController = TextEditingController();
-  final _chatLimitController = TextEditingController();
-  final _enquiryLimitController = TextEditingController();
-
-  String _currency = 'INR';
-  bool _chatUnlimited = false;
-  String _chatLimitPeriod = 'daily';
-  bool _enquiryUnlimited = false;
-  String _enquiryLimitPeriod = 'daily';
-  bool _isActive = true;
-  bool _isLoading = false;
-
-  static const List<String> _periodOptions = [
-    'daily',
-    'weekly',
-    'monthly',
-    'subscription'
-  ];
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _descriptionController.dispose();
-    _priceController.dispose();
-    _durationController.dispose();
-    _chatLimitController.dispose();
-    _enquiryLimitController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _createPlan() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    setState(() => _isLoading = true);
-
-    try {
-      final request = OlxCommunicationPlanCreateRequest(
-        name: _nameController.text.trim(),
-        description: _descriptionController.text.trim(),
-        price: _priceController.text.trim(),
-        currency: _currency,
-        durationDays: int.tryParse(_durationController.text.trim()) ?? 0,
-        chatLimit: _chatUnlimited
-            ? 0
-            : (int.tryParse(_chatLimitController.text.trim()) ?? 0),
-        chatUnlimited: _chatUnlimited,
-        chatLimitPeriod: _chatLimitPeriod,
-        enquiryLimit: _enquiryUnlimited
-            ? 0
-            : (int.tryParse(_enquiryLimitController.text.trim()) ?? 0),
-        enquiryUnlimited: _enquiryUnlimited,
-        enquiryLimitPeriod: _enquiryLimitPeriod,
-        isActive: _isActive,
-      );
-
-      final response = await _service.createPlan(request);
-
-      if (response.status) {
-        _showSnackBar(
-            response.message.isNotEmpty
-                ? response.message
-                : 'Plan created successfully',
-            _kSuccess);
-        widget.onSuccess();
-      } else {
-        _showSnackBar(response.message, _kDanger);
-      }
-    } catch (e) {
-      _showSnackBar(e.toString(), _kDanger);
-    }
-
-    if (mounted) setState(() => _isLoading = false);
-  }
-
-  void _showSnackBar(String msg, Color color) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        backgroundColor: color,
-        duration: const Duration(seconds: 2),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
-
-  Widget _buildSectionTitle(String title, IconData icon, bool isDark) {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(4),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFF4158D0), Color(0xFFC850C0)],
-            ),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(icon, size: 14, color: Colors.white),
-        ),
-        const SizedBox(width: 8),
-        Text(
-          title,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.bold,
-            color: isDark ? Colors.white : const Color(0xFF1E293B),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildTextField({
-    required TextEditingController controller,
-    required String label,
-    required String hint,
-    required IconData icon,
-    required bool isDark,
-    TextInputType keyboardType = TextInputType.text,
-    int maxLines = 1,
-    bool isRequired = true,
-    List<TextInputFormatter>? inputFormatters,
-    String? Function(String?)? validator,
-  }) {
-    return TextFormField(
-      controller: controller,
-      keyboardType: keyboardType,
-      maxLines: maxLines,
-      inputFormatters: inputFormatters,
-      validator: validator ??
-          (isRequired
-              ? (v) =>
-          (v == null || v.trim().isEmpty) ? "$label is required" : null
-              : null),
-      style: TextStyle(
-        color: isDark ? Colors.white : Colors.black87,
-        fontSize: 13,
-      ),
-      decoration: InputDecoration(
-        labelText: isRequired ? "$label *" : label,
-        labelStyle: TextStyle(
-          color: isDark ? Colors.grey[400] : Colors.grey[600],
-          fontSize: 12,
-        ),
-        hintText: hint,
-        hintStyle: TextStyle(
-          color: isDark ? Colors.grey[500] : Colors.grey[400],
-          fontSize: 12,
-        ),
-        prefixIcon: Icon(icon, size: 18, color: const Color(0xFF4158D0)),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(
-            color: isDark ? Colors.grey[700]! : Colors.grey[400]!,
-            width: 1.5,
-          ),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(
-            color: isDark ? Colors.grey[700]! : Colors.grey[400]!,
-            width: 1.5,
-          ),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Color(0xFF4158D0), width: 2),
-        ),
-        filled: true,
-        fillColor: isDark ? const Color(0xFF1A1A2E) : const Color(0xFFF8FAFC),
-        contentPadding:
-        const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      ),
-    );
-  }
-
-  Widget _buildDropdown({
-    required String label,
-    required String value,
-    required List<String> items,
-    required ValueChanged<String?> onChanged,
-    required IconData icon,
-    required bool isDark,
-  }) {
-    return DropdownButtonFormField<String>(
-      value: value,
-      decoration: InputDecoration(
-        labelText: label,
-        labelStyle: TextStyle(
-          color: isDark ? Colors.grey[400] : Colors.grey[600],
-          fontSize: 12,
-        ),
-        prefixIcon: Icon(icon, size: 18, color: const Color(0xFF4158D0)),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(
-            color: isDark ? Colors.grey[700]! : Colors.grey[400]!,
-            width: 1.5,
-          ),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(
-            color: isDark ? Colors.grey[700]! : Colors.grey[400]!,
-            width: 1.5,
-          ),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Color(0xFF4158D0), width: 2),
-        ),
-        filled: true,
-        fillColor: isDark ? const Color(0xFF1A1A2E) : const Color(0xFFF8FAFC),
-        contentPadding:
-        const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      ),
-      items: items
-          .map((e) => DropdownMenuItem(
-        value: e,
-        child: Text(
-          e[0].toUpperCase() + e.substring(1),
-          style: TextStyle(
-            color: isDark ? Colors.white : Colors.black87,
-            fontSize: 13,
-          ),
-        ),
-      ))
-          .toList(),
-      onChanged: onChanged,
-      dropdownColor: isDark ? const Color(0xFF1A1A2E) : Colors.white,
-    );
-  }
-
-  Widget _buildSwitchTile({
-    required String title,
-    required String subtitle,
-    required bool value,
-    required ValueChanged<bool> onChanged,
-    required bool isDark,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1A1A2E) : const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: isDark ? Colors.grey[700]! : Colors.grey[400]!,
-          width: 1.5,
-        ),
-      ),
-      child: Row(
-        children: [
-          Expanded(
+        child: Material(
+          color: accent,
+          borderRadius: _outerRadius,
+          clipBehavior: Clip.antiAlias,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 4, 0),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13,
-                    color: isDark ? Colors.white : const Color(0xFF1E293B),
+                // Inner white panel
+                Expanded(
+                  child: Container(
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: _innerRadius,
+                    ),
+                    padding: const EdgeInsets.fromLTRB(22, 18, 22, 24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: _StatusBadge(active: plan.isActive),
+                        ),
+                        const SizedBox(height: 10),
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            _formatPrice(plan.price, plan.currency),
+                            maxLines: 1,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 34,
+                              height: 1.0,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -1,
+                              color: accent,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'for ${plan.durationDays} ${plan.durationDays == 1 ? 'day' : 'days'}',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(fontSize: 12, color: _kMuted),
+                        ),
+                        const SizedBox(height: 16),
+                        _dashedDivider(),
+                        _featureLine(_allowanceLabel(plan.chatUnlimited,
+                            plan.chatLimit, plan.chatLimitPeriod, 'chats')),
+                        _dashedDivider(),
+                        _featureLine(_allowanceLabel(
+                            plan.enquiryUnlimited,
+                            plan.enquiryLimit,
+                            plan.enquiryLimitPeriod,
+                            'enquiries')),
+                        _dashedDivider(),
+                        _featureLine(
+                          description.isEmpty
+                              ? 'No description provided'
+                              : description,
+                          muted: description.isEmpty,
+                        ),
+                        _dashedDivider(),
+                        const Spacer(),
+                        const SizedBox(height: 20),
+                        Center(
+                          child: AnimatedScale(
+                            scale: _hovering ? 1.06 : 1.0,
+                            duration: const Duration(milliseconds: 180),
+                            child: Container(
+                              width: 60,
+                              height: 60,
+                              decoration: BoxDecoration(
+                                color: accent,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: ring, width: 4),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: accent.withOpacity(0.3),
+                                    blurRadius: 12,
+                                    offset: const Offset(0, 4),
+                                  ),
+                                ],
+                              ),
+                              child: Icon(widget.icon,
+                                  color: Colors.white, size: 26),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: isDark ? Colors.grey[500] : Colors.grey,
+
+                // Footer: name tab + edit / details actions
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 12, 26, 12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 7),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              plan.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: accent,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 15,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        tooltip: 'Edit plan',
+                        onPressed: widget.onEdit,
+                        color: Colors.white,
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.edit_outlined, size: 18),
+                      ),
+                      Tooltip(
+                        message: 'View plan details',
+                        child: TextButton.icon(
+                          onPressed: widget.onView,
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 8),
+                            visualDensity: VisualDensity.compact,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
+                          ),
+                          icon: const Icon(Icons.visibility_outlined, size: 18),
+                          label: const Text(
+                            'Details',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
           ),
-          Switch(
-            value: value,
-            activeColor: const Color(0xFF4158D0),
-            onChanged: onChanged,
-          ),
-        ],
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Container(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const SizedBox(width: 40),
-              Expanded(
-                child: Column(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFF4158D0), Color(0xFFC850C0)],
-                        ),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: const Icon(
-                        Icons.add_circle_outline,
-                        color: Colors.white,
-                        size: 24,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Create Communication Plan',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: isDark ? Colors.white : const Color(0xFF1E293B),
-                      ),
-                    ),
-                    Text(
-                      'Set chat and enquiry allowances',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isDark ? Colors.grey[400] : Colors.grey[600],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              IconButton(
-                onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.close, color: Colors.red),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          const Divider(),
-          const SizedBox(height: 16),
-          Expanded(
-            child: SingleChildScrollView(
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Basic Info
-                    _buildSectionTitle('Basic Information',
-                        Icons.info_outline, isDark),
-                    const SizedBox(height: 12),
-                    _buildTextField(
-                      controller: _nameController,
-                      label: 'Plan Name',
-                      hint: 'e.g., Silver Communication Plan',
-                      icon: Icons.card_membership,
-                      isDark: isDark,
-                    ),
-                    const SizedBox(height: 12),
-                    _buildTextField(
-                      controller: _descriptionController,
-                      label: 'Description',
-                      hint: 'Brief description of the plan',
-                      icon: Icons.description_outlined,
-                      isDark: isDark,
-                      maxLines: 2,
-                      isRequired: false,
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _buildTextField(
-                            controller: _priceController,
-                            label: 'Price',
-                            hint: 'e.g., 199.00',
-                            icon: Icons.currency_rupee,
-                            isDark: isDark,
-                            keyboardType: const TextInputType.numberWithOptions(
-                                decimal: true),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _buildDropdown(
-                            label: 'Currency',
-                            value: _currency,
-                            items: ['INR', 'USD', 'EUR'],
-                            onChanged: (v) =>
-                                setState(() => _currency = v ?? 'INR'),
-                            icon: Icons.currency_exchange,
-                            isDark: isDark,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    _buildTextField(
-                      controller: _durationController,
-                      label: 'Duration (Days)',
-                      hint: 'e.g., 30',
-                      icon: Icons.calendar_today,
-                      isDark: isDark,
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    ),
-                    const SizedBox(height: 20),
-
-                    // Chat Settings
-                    _buildSectionTitle(
-                        'Chat Settings', Icons.chat_bubble_outline, isDark),
-                    const SizedBox(height: 12),
-                    _buildSwitchTile(
-                      title: 'Unlimited Chats',
-                      subtitle: 'Enable unlimited chat allowance',
-                      value: _chatUnlimited,
-                      onChanged: (v) => setState(() => _chatUnlimited = v),
-                      isDark: isDark,
-                    ),
-                    const SizedBox(height: 12),
-                    if (!_chatUnlimited) ...[
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _buildTextField(
-                              controller: _chatLimitController,
-                              label: 'Chat Limit',
-                              hint: 'e.g., 100',
-                              icon: Icons.chat,
-                              isDark: isDark,
-                              keyboardType: TextInputType.number,
-                              inputFormatters: [
-                                FilteringTextInputFormatter.digitsOnly
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _buildDropdown(
-                              label: 'Chat Period',
-                              value: _chatLimitPeriod,
-                              items: _periodOptions,
-                              onChanged: (v) => setState(
-                                      () => _chatLimitPeriod = v ?? 'daily'),
-                              icon: Icons.schedule,
-                              isDark: isDark,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    const SizedBox(height: 8),
-
-                    // Enquiry Settings
-                    _buildSectionTitle('Enquiry Settings',
-                        Icons.question_answer_outlined, isDark),
-                    const SizedBox(height: 12),
-                    _buildSwitchTile(
-                      title: 'Unlimited Enquiries',
-                      subtitle: 'Enable unlimited enquiry allowance',
-                      value: _enquiryUnlimited,
-                      onChanged: (v) => setState(() => _enquiryUnlimited = v),
-                      isDark: isDark,
-                    ),
-                    const SizedBox(height: 12),
-                    if (!_enquiryUnlimited) ...[
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _buildTextField(
-                              controller: _enquiryLimitController,
-                              label: 'Enquiry Limit',
-                              hint: 'e.g., 25',
-                              icon: Icons.question_answer,
-                              isDark: isDark,
-                              keyboardType: TextInputType.number,
-                              inputFormatters: [
-                                FilteringTextInputFormatter.digitsOnly
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _buildDropdown(
-                              label: 'Enquiry Period',
-                              value: _enquiryLimitPeriod,
-                              items: _periodOptions,
-                              onChanged: (v) => setState(
-                                      () => _enquiryLimitPeriod = v ?? 'daily'),
-                              icon: Icons.schedule,
-                              isDark: isDark,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    const SizedBox(height: 8),
-
-                    // Status
-                    _buildSectionTitle('Status', Icons.toggle_on, isDark),
-                    const SizedBox(height: 12),
-                    _buildSwitchTile(
-                      title: 'Active Status',
-                      subtitle: 'Enable or disable this plan',
-                      value: _isActive,
-                      onChanged: (v) => setState(() => _isActive = v),
-                      isDark: isDark,
-                    ),
-                    const SizedBox(height: 20),
-
-                    Center(
-                      child: SizedBox(
-                        width: 220,
-                        height: 46,
-                        child: ElevatedButton(
-                          onPressed: _isLoading ? null : _createPlan,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF4158D0),
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            elevation: 2,
-                          ),
-                          child: _isLoading
-                              ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2.5,
-                            ),
-                          )
-                              : const Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.check_circle, size: 18),
-                              SizedBox(width: 8),
-                              Text(
-                                'Create Plan',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 }
 
-// ============================================================================
-// ==================== UPDATE FORM CONTENT ===================================
-// ============================================================================
-class _UpdateCommunicationPlanFormContent extends StatefulWidget {
-  final OlxCommunicationPlanData plan;
-  final VoidCallback onSuccess;
+// ==================== DASHED DIVIDER PAINTER ====================
+class _DashedLinePainter extends CustomPainter {
+  final Color color;
 
-  const _UpdateCommunicationPlanFormContent({
-    Key? key,
-    required this.plan,
-    required this.onSuccess,
-  }) : super(key: key);
+  const _DashedLinePainter(this.color);
 
   @override
-  State<_UpdateCommunicationPlanFormContent> createState() =>
-      _UpdateCommunicationPlanFormContentState();
-}
-
-class _UpdateCommunicationPlanFormContentState
-    extends State<_UpdateCommunicationPlanFormContent> {
-  final _formKey = GlobalKey<FormState>();
-  final OlxCommunicationPlanService _service = OlxCommunicationPlanService();
-
-  final _nameController = TextEditingController();
-  final _descriptionController = TextEditingController();
-  final _priceController = TextEditingController();
-  final _durationController = TextEditingController();
-  final _chatLimitController = TextEditingController();
-  final _enquiryLimitController = TextEditingController();
-
-  String _currency = 'INR';
-  bool _chatUnlimited = false;
-  String _chatLimitPeriod = 'daily';
-  bool _enquiryUnlimited = false;
-  String _enquiryLimitPeriod = 'daily';
-  bool _isActive = true;
-  bool _isLoading = false;
-
-  static const List<String> _periodOptions = [
-    'daily',
-    'weekly',
-    'monthly',
-    'subscription'
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    final p = widget.plan;
-    _nameController.text = p.name;
-    _descriptionController.text = p.description;
-    _priceController.text = p.price;
-    _currency = p.currency;
-    _durationController.text = p.durationDays.toString();
-    _chatLimitController.text = p.chatLimit.toString();
-    _chatUnlimited = p.chatUnlimited;
-    _chatLimitPeriod = p.chatLimitPeriod;
-    _enquiryLimitController.text = p.enquiryLimit.toString();
-    _enquiryUnlimited = p.enquiryUnlimited;
-    _enquiryLimitPeriod = p.enquiryLimitPeriod;
-    _isActive = p.isActive;
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _descriptionController.dispose();
-    _priceController.dispose();
-    _durationController.dispose();
-    _chatLimitController.dispose();
-    _enquiryLimitController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _updatePlan() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    setState(() => _isLoading = true);
-
-    try {
-      final request = OlxCommunicationPlanUpdateRequest(
-        planId: widget.plan.id,
-        name: _nameController.text.trim(),
-        description: _descriptionController.text.trim(),
-        price: _priceController.text.trim(),
-        currency: _currency,
-        durationDays: int.tryParse(_durationController.text.trim()) ?? 0,
-        chatLimit: _chatUnlimited
-            ? 0
-            : (int.tryParse(_chatLimitController.text.trim()) ?? 0),
-        chatUnlimited: _chatUnlimited,
-        chatLimitPeriod: _chatLimitPeriod,
-        enquiryLimit: _enquiryUnlimited
-            ? 0
-            : (int.tryParse(_enquiryLimitController.text.trim()) ?? 0),
-        enquiryUnlimited: _enquiryUnlimited,
-        enquiryLimitPeriod: _enquiryLimitPeriod,
-        isActive: _isActive,
-      );
-
-      final response = await _service.updatePlan(request);
-
-      if (response.status) {
-        _showSnackBar(
-            response.message.isNotEmpty
-                ? response.message
-                : 'Plan updated successfully',
-            _kSuccess);
-        widget.onSuccess();
-      } else {
-        _showSnackBar(response.message, _kDanger);
-      }
-    } catch (e) {
-      _showSnackBar(e.toString(), _kDanger);
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1;
+    const dash = 4.0;
+    const gap = 3.0;
+    final y = size.height / 2;
+    double x = 0;
+    while (x < size.width) {
+      final endX = (x + dash) > size.width ? size.width : x + dash;
+      canvas.drawLine(Offset(x, y), Offset(endX, y), paint);
+      x += dash + gap;
     }
-
-    if (mounted) setState(() => _isLoading = false);
-  }
-
-  void _showSnackBar(String msg, Color color) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        backgroundColor: color,
-        duration: const Duration(seconds: 2),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
-
-  Widget _buildSectionTitle(String title, IconData icon, bool isDark) {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(4),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFF4158D0), Color(0xFFC850C0)],
-            ),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(icon, size: 14, color: Colors.white),
-        ),
-        const SizedBox(width: 8),
-        Text(
-          title,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.bold,
-            color: isDark ? Colors.white : const Color(0xFF1E293B),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildTextField({
-    required TextEditingController controller,
-    required String label,
-    required String hint,
-    required IconData icon,
-    required bool isDark,
-    TextInputType keyboardType = TextInputType.text,
-    int maxLines = 1,
-    bool isRequired = true,
-    List<TextInputFormatter>? inputFormatters,
-    String? Function(String?)? validator,
-  }) {
-    return TextFormField(
-      controller: controller,
-      keyboardType: keyboardType,
-      maxLines: maxLines,
-      inputFormatters: inputFormatters,
-      validator: validator ??
-          (isRequired
-              ? (v) =>
-          (v == null || v.trim().isEmpty) ? "$label is required" : null
-              : null),
-      style: TextStyle(
-        color: isDark ? Colors.white : Colors.black87,
-        fontSize: 13,
-      ),
-      decoration: InputDecoration(
-        labelText: isRequired ? "$label *" : label,
-        labelStyle: TextStyle(
-          color: isDark ? Colors.grey[400] : Colors.grey[600],
-          fontSize: 12,
-        ),
-        hintText: hint,
-        hintStyle: TextStyle(
-          color: isDark ? Colors.grey[500] : Colors.grey[400],
-          fontSize: 12,
-        ),
-        prefixIcon: Icon(icon, size: 18, color: const Color(0xFF4158D0)),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(
-            color: isDark ? Colors.grey[700]! : Colors.grey[400]!,
-            width: 1.5,
-          ),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(
-            color: isDark ? Colors.grey[700]! : Colors.grey[400]!,
-            width: 1.5,
-          ),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Color(0xFF4158D0), width: 2),
-        ),
-        filled: true,
-        fillColor: isDark ? const Color(0xFF1A1A2E) : const Color(0xFFF8FAFC),
-        contentPadding:
-        const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      ),
-    );
-  }
-
-  Widget _buildDropdown({
-    required String label,
-    required String value,
-    required List<String> items,
-    required ValueChanged<String?> onChanged,
-    required IconData icon,
-    required bool isDark,
-  }) {
-    return DropdownButtonFormField<String>(
-      value: value,
-      decoration: InputDecoration(
-        labelText: label,
-        labelStyle: TextStyle(
-          color: isDark ? Colors.grey[400] : Colors.grey[600],
-          fontSize: 12,
-        ),
-        prefixIcon: Icon(icon, size: 18, color: const Color(0xFF4158D0)),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(
-            color: isDark ? Colors.grey[700]! : Colors.grey[400]!,
-            width: 1.5,
-          ),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(
-            color: isDark ? Colors.grey[700]! : Colors.grey[400]!,
-            width: 1.5,
-          ),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Color(0xFF4158D0), width: 2),
-        ),
-        filled: true,
-        fillColor: isDark ? const Color(0xFF1A1A2E) : const Color(0xFFF8FAFC),
-        contentPadding:
-        const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      ),
-      items: items
-          .map((e) => DropdownMenuItem(
-        value: e,
-        child: Text(
-          e[0].toUpperCase() + e.substring(1),
-          style: TextStyle(
-            color: isDark ? Colors.white : Colors.black87,
-            fontSize: 13,
-          ),
-        ),
-      ))
-          .toList(),
-      onChanged: onChanged,
-      dropdownColor: isDark ? const Color(0xFF1A1A2E) : Colors.white,
-    );
-  }
-
-  Widget _buildSwitchTile({
-    required String title,
-    required String subtitle,
-    required bool value,
-    required ValueChanged<bool> onChanged,
-    required bool isDark,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1A1A2E) : const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: isDark ? Colors.grey[700]! : Colors.grey[400]!,
-          width: 1.5,
-        ),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13,
-                    color: isDark ? Colors.white : const Color(0xFF1E293B),
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: isDark ? Colors.grey[500] : Colors.grey,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Switch(
-            value: value,
-            activeColor: const Color(0xFF4158D0),
-            onChanged: onChanged,
-          ),
-        ],
-      ),
-    );
   }
 
   @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Container(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const SizedBox(width: 40),
-              Expanded(
-                child: Column(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFF4158D0), Color(0xFFC850C0)],
-                        ),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: const Icon(
-                        Icons.edit_note,
-                        color: Colors.white,
-                        size: 24,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Update Communication Plan',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: isDark ? Colors.white : const Color(0xFF1E293B),
-                      ),
-                    ),
-                    Text(
-                      'Updating: ${widget.plan.name}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isDark ? Colors.grey[400] : Colors.grey[600],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              IconButton(
-                onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.close, color: Colors.red),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          const Divider(),
-          const SizedBox(height: 16),
-          Expanded(
-            child: SingleChildScrollView(
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Info box - Plan ID
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: isDark
-                            ? const Color(0xFF4158D0).withOpacity(0.15)
-                            : const Color(0xFFEEF2FF),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                          color: const Color(0xFF4158D0).withOpacity(0.3),
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.tag,
-                              color: Color(0xFF4158D0), size: 18),
-                          const SizedBox(width: 10),
-                          Text(
-                            'Plan ID: #${widget.plan.id}',
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: Color(0xFF4158D0),
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-
-                    // Basic Info
-                    _buildSectionTitle('Basic Information',
-                        Icons.info_outline, isDark),
-                    const SizedBox(height: 12),
-                    _buildTextField(
-                      controller: _nameController,
-                      label: 'Plan Name',
-                      hint: 'e.g., Silver Communication Plan',
-                      icon: Icons.card_membership,
-                      isDark: isDark,
-                    ),
-                    const SizedBox(height: 12),
-                    _buildTextField(
-                      controller: _descriptionController,
-                      label: 'Description',
-                      hint: 'Brief description of the plan',
-                      icon: Icons.description_outlined,
-                      isDark: isDark,
-                      maxLines: 2,
-                      isRequired: false,
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _buildTextField(
-                            controller: _priceController,
-                            label: 'Price',
-                            hint: 'e.g., 199.00',
-                            icon: Icons.currency_rupee,
-                            isDark: isDark,
-                            keyboardType: const TextInputType.numberWithOptions(
-                                decimal: true),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _buildDropdown(
-                            label: 'Currency',
-                            value: _currency,
-                            items: ['INR', 'USD', 'EUR'],
-                            onChanged: (v) =>
-                                setState(() => _currency = v ?? 'INR'),
-                            icon: Icons.currency_exchange,
-                            isDark: isDark,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    _buildTextField(
-                      controller: _durationController,
-                      label: 'Duration (Days)',
-                      hint: 'e.g., 30',
-                      icon: Icons.calendar_today,
-                      isDark: isDark,
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    ),
-                    const SizedBox(height: 20),
-
-                    // Chat Settings
-                    _buildSectionTitle(
-                        'Chat Settings', Icons.chat_bubble_outline, isDark),
-                    const SizedBox(height: 12),
-                    _buildSwitchTile(
-                      title: 'Unlimited Chats',
-                      subtitle: 'Enable unlimited chat allowance',
-                      value: _chatUnlimited,
-                      onChanged: (v) => setState(() => _chatUnlimited = v),
-                      isDark: isDark,
-                    ),
-                    const SizedBox(height: 12),
-                    if (!_chatUnlimited) ...[
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _buildTextField(
-                              controller: _chatLimitController,
-                              label: 'Chat Limit',
-                              hint: 'e.g., 100',
-                              icon: Icons.chat,
-                              isDark: isDark,
-                              keyboardType: TextInputType.number,
-                              inputFormatters: [
-                                FilteringTextInputFormatter.digitsOnly
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _buildDropdown(
-                              label: 'Chat Period',
-                              value: _chatLimitPeriod,
-                              items: _periodOptions,
-                              onChanged: (v) => setState(
-                                      () => _chatLimitPeriod = v ?? 'daily'),
-                              icon: Icons.schedule,
-                              isDark: isDark,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    const SizedBox(height: 8),
-
-                    // Enquiry Settings
-                    _buildSectionTitle('Enquiry Settings',
-                        Icons.question_answer_outlined, isDark),
-                    const SizedBox(height: 12),
-                    _buildSwitchTile(
-                      title: 'Unlimited Enquiries',
-                      subtitle: 'Enable unlimited enquiry allowance',
-                      value: _enquiryUnlimited,
-                      onChanged: (v) => setState(() => _enquiryUnlimited = v),
-                      isDark: isDark,
-                    ),
-                    const SizedBox(height: 12),
-                    if (!_enquiryUnlimited) ...[
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _buildTextField(
-                              controller: _enquiryLimitController,
-                              label: 'Enquiry Limit',
-                              hint: 'e.g., 25',
-                              icon: Icons.question_answer,
-                              isDark: isDark,
-                              keyboardType: TextInputType.number,
-                              inputFormatters: [
-                                FilteringTextInputFormatter.digitsOnly
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _buildDropdown(
-                              label: 'Enquiry Period',
-                              value: _enquiryLimitPeriod,
-                              items: _periodOptions,
-                              onChanged: (v) => setState(
-                                      () => _enquiryLimitPeriod = v ?? 'daily'),
-                              icon: Icons.schedule,
-                              isDark: isDark,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    const SizedBox(height: 8),
-
-                    // Status
-                    _buildSectionTitle('Status', Icons.toggle_on, isDark),
-                    const SizedBox(height: 12),
-                    _buildSwitchTile(
-                      title: 'Active Status',
-                      subtitle: 'Enable or disable this plan',
-                      value: _isActive,
-                      onChanged: (v) => setState(() => _isActive = v),
-                      isDark: isDark,
-                    ),
-                    const SizedBox(height: 20),
-
-                    Center(
-                      child: SizedBox(
-                        width: 220,
-                        height: 46,
-                        child: ElevatedButton(
-                          onPressed: _isLoading ? null : _updatePlan,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.blue,
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            elevation: 2,
-                          ),
-                          child: _isLoading
-                              ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2.5,
-                            ),
-                          )
-                              : const Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.save, size: 18),
-                              SizedBox(width: 8),
-                              Text(
-                                'Update Plan',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  bool shouldRepaint(covariant _DashedLinePainter oldDelegate) =>
+      oldDelegate.color != color;
 }

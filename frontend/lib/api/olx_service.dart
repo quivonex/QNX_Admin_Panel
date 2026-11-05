@@ -521,13 +521,13 @@ class OlxSettingsService {
         body['id'] = id;
       }
 
-      final response = await _client.post(
+      final response = await _client.get(
         Uri.parse(ApiUrls.olxSettingsList),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
         },
-        body: jsonEncode(body),
+
       );
 
       print('📤 OLX Settings Get: ${body.isEmpty ? "all" : body}');

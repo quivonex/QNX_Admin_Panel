@@ -5,11 +5,12 @@ class ApiUrls {
   // static const String baseUrl = "http://192.168.0.196:16000";
   // static const String baseUrl = "http://172.19.117.48:16000";
   // static const String baseUrl = "http://192.168.31.173:16000";
-   static const String baseUrl = "http://192.168.31.252:16000";
+   static const String baseUrl = "http://192.168.31.251:16000";
    // static const String baseUrl = "http://169.254.9.67:16000";
    // static const String baseUrl = "https://test.qnxmartb2b.com";
-   // static const String baseUrl = "https://api.qnxmartb2b.com";
+  //  static const String baseUrl = "https://api.qnxmartb2b.com";
   // static const String baseUrl = "https://crummy-gestation-unrigged.ngrok-free.dev";
+
 
   // -------------------------------Company create------------------------------
   static const String companyCreate = "$baseUrl/company/company/create/";
@@ -64,7 +65,7 @@ class ApiUrls {
   // New endpoint for latest enquiries (POST)
   static const String latestEnquiries = "$baseUrl/enquiry/latest-enquiries/";
   // ------------------------------- Agreement List ----------------------------
-   static const String companyAgreementList = "$baseUrl/agreement/company-agreement/list/";
+  // static const String companyAgreementList = "$baseUrl/agreement/company-agreement/list/";
   //-------------------------------offer list-----------------------------------
   static const String offerList = "$baseUrl/offer/offers/listall/";
   //-------------------------------offer list update----------------------------
@@ -111,7 +112,7 @@ class ApiUrls {
 
   static const String enquirycard = "$baseUrl/enquiry/enquiry-count/";
 
-   static const String createAgreement = "$baseUrl/agreement/company-agreement/create/";
+  // static const String createAgreement = "$baseUrl/agreement/company-agreement/create/";
 
 
   //----------------------------------------------------------------------------
@@ -154,8 +155,8 @@ class ApiUrls {
   // -------------------------------Franchise endpoints------------------------------
   static const String franchiseList = "$baseUrl/franchicies/franchise/public-list/";
   // Agreement Approve/Reject URLs
-  static const String companyAgreementApprove = "$baseUrl/agreement/company-agreement/approve/reject/";
-  static const String companyAgreementReject = "$baseUrl/agreement/company-agreement/approve/reject/";
+ // static const String companyAgreementApprove = "$baseUrl/agreement/company-agreement/approve/reject/";
+ // static const String companyAgreementReject = "$baseUrl/agreement/company-agreement/approve/reject/";
 
   // ✅ Agreement Percentage Update URL
   static const String updateAgreementPercentage =
@@ -181,7 +182,7 @@ class ApiUrls {
 
   static const String withdrawAmount = "$baseUrl/payment/marketing-partner/wallet/withdraw/amount/";
   // -------------------------------Amount Update------------------------------
-  static const String amountUpdate = "$baseUrl/payment/amount_update/";
+  static const String amountUpdate = "$baseUrl/payment/payment-setting/company-registration/update/";
 
   // -------------------------------Loan Enquiry--------------------------------
   static const String loanEnquiryList = "$baseUrl/loan/loan-enquiry/list/";
@@ -200,23 +201,47 @@ class ApiUrls {
   static const String customerSubscriptionPlanCreate = "$baseUrl/payment/customer-subscription-plans/create/";
   static const String customerSubscriptionPlanList = "$baseUrl/payment/customer-subscription-plans/";
 
+
+
+
+
+  // ==================== COMPANY AGREEMENT ====================
+  static const String companyAgreementCreate = "$baseUrl/agreement/company-agreement/create/";
+  static const String companyAgreementList = "$baseUrl/agreement/company-agreement/list/";
+  static const String companyAgreementApproveReject = "$baseUrl/agreement/company-agreement/approve/reject/";
+  static const String companyAgreementDownload = "$baseUrl/agreement/company-agreement/download/";
+  static const String companyAgreementTerminate = "$baseUrl/agreement/company-agreement/terminate/";
+
+  // ==================== MARKETING PARTNER AGREEMENT ====================
+  static const String marketingPartnerAgreementCreate = "$baseUrl/agreement/marketing-partner-agreement/create/";
+  static const String marketingPartnerAgreementList = "$baseUrl/agreement/marketing-partner-agreement/list/";
+  static const String marketingPartnerAgreementApproveReject = "$baseUrl/agreement/marketing-partner-agreement/approve/reject/";
+  static const String marketingPartnerAgreementDownload = "$baseUrl/agreement/marketing-partner-agreement/download/";
+  static const String marketingPartnerAgreementTerminate = "$baseUrl/agreement/marketing-partner-agreement/terminate/";
+
+  // ==================== SAMPLE DOWNLOAD ====================
+  static const String sampleAgreementDownload = "$baseUrl/agreement/agreement/sample/download/";
+
+
+
+
   //=============================================================================================================
   //-------------------------------------------------marketing head------------------------------------------
   //===============================================================================================================
   static const String myMarketingProfile = "$baseUrl/enquiry/my-marketing-profile/";
   static const String myReferredPartners = '$baseUrl/enquiry/my-referred-partners/';
   static const String marketingHeadCompanies = "$baseUrl/enquiry/marketing-head-companies/";
-  static const String createPartnerHeadAgreement = "$baseUrl/agreement/create-partner-head-agreement/";
+  //static const String createPartnerHeadAgreement = "$baseUrl/agreement/create-partner-head-agreement/";
   //=============================================================================================================
   //-------------------------------------------------marketing partner------------------------------------------
   //=========================================================================================================
   static const String myMarketingCompanies = "$baseUrl/enquiry/my-marketing-companies/";
 // ------------------ Marketing Partner Agreement ------------------
   // ==================== MARKETING PARTNER AGREEMENT ====================
-  static const String marketingPartnerAgreementList = "$baseUrl/agreement/marketing-partner-agreement/list/";
-  static const String marketingPartnerAgreementCreate = "$baseUrl/agreement/marketing-partner-agreement/create/";
-  static const String marketingPartnerAgreementApprove = "$baseUrl/agreement/marketing-partner-agreement/approve/reject/";
-  static const String marketingPartnerAgreementReject = "$baseUrl/agreement/marketing-partner-agreement/approve/reject/";
+//  static const String marketingPartnerAgreementList = "$baseUrl/agreement/marketing-partner-agreement/list/";
+  //static const String marketingPartnerAgreementCreate = "$baseUrl/agreement/marketing-partner-agreement/create/";
+//  static const String marketingPartnerAgreementApprove = "$baseUrl/agreement/marketing-partner-agreement/approve/reject/";
+ // static const String marketingPartnerAgreementReject = "$baseUrl/agreement/marketing-partner-agreement/approve/reject/";
 // ✅ Keep old for backward compatibility
   static const String marketingPartnerAgreement = "$baseUrl/agreement/marketing-partner-agreement/";
   static const String commissionUrl = "$baseUrl/payment/marketing-partner/commission/";
@@ -229,9 +254,20 @@ class ApiUrls {
   static const String generateFranchiseReferral = "$baseUrl/franchicies/generate_referral_link/";
 
   static const String updateBankDetails = "$baseUrl/enquiry/bank-details/update/";
-  static const String myMarketingPartnerAgreements = "$baseUrl/agreement/marketing-partner-agreement/my/";
+//  static const String myMarketingPartnerAgreements = "$baseUrl/agreement/marketing-partner-agreement/my/";
 
 
+
+
+  // ==================== MARKETING PARTNER - MY AGREEMENTS ====================
+// ✅ List (सगळे agreements - partner चे)
+  static const String myMarketingPartnerAgreementList = "$baseUrl/agreement/marketing-partner-agreement/my-list/";
+// ✅ Only approved (finalized) agreements
+  static const String myMarketingPartnerApprovedAgreements = "$baseUrl/agreement/marketing-partner-agreement/my/";
+// ✅ Partner Sign (approve - partner ने सही केली)
+  static const String marketingPartnerAgreementPartnerSign = "$baseUrl/agreement/marketing-partner-agreement/partner-sign/";
+// ✅ Reject by partner (same endpoint, फक्त rejection_reason सोबत)
+  static const String marketingPartnerAgreementPartnerReject = "$baseUrl/agreement/marketing-partner-agreement/partner-sign/";
 
 
 // ----------------------------------REAL ESTATE PROPERTY REFERRAL URLS-----------------------------------------
@@ -249,7 +285,6 @@ class ApiUrls {
   // ✅ Reverse Geocoding API (Get location name from coordinates)
   static const String reverseGeocodeApi = "$baseUrl/admin_profile/places/reverse-geocode/";
   static const String googleGeocodeUrl = "https://maps.googleapis.com/maps/api/geocode/json";
-
 
   //==================================================================================================================
   //----------------------------------RealEstate URLS---------------------------------------------------------
@@ -278,13 +313,12 @@ class ApiUrls {
   // -------------------------------Property Create-----------------------------
   static const String propertyCreate = "$baseUrl/real_estate/property/create/";
 
-
 //=================================================================================================================
   // ===================== SHIPROCKET ENDPOINTS ================================
  //==================================================================================================================
   static const String shipOrders = "$baseUrl/shipping/ship-orders/";
   static const String shiprocketCreateOrder = "$baseUrl/shipping/shiprocket-create-order/";
-
+  static const String trackShipment = "$baseUrl/shipping/track-shipment/";
   static const String shipmentList = "$baseUrl/shipping/shipments/list/";
   static const String assignAWB = "$baseUrl/shipping/assign-awb/";
   // ===================== SHIPROCKET COURIER RATES =====================
@@ -296,12 +330,10 @@ class ApiUrls {
   // -------------------------------Channel Partner Enquiries------------------------------
   static const String channelPartnerEnquiries = "$baseUrl/real_estate/channel-partner/enquiries/";
 
-
   // ==================== REAL ESTATE - MY PROPERTIES ====================
   static const String myProperties = "$baseUrl/real_estate/my/properties/";
   static const String propertyUpdate = "$baseUrl/real_estate/property-update/";
-  
-  
+
   // Schedule Meeting endpoint
   static const String scheduleMeeting = "$baseUrl/real_estate/property-enquiry/schedule-meeting/";
 
@@ -344,14 +376,9 @@ class ApiUrls {
   static const String olxCommunicationPlanList = "$olxBaseUrl/bazaar-communication-plans/list/";
   static const String olxCommunicationPlanUpdate = "$olxBaseUrl/bazaar-communication-plans/update/";
 
-
-
   // ==================== OLX COMMUNICATION SETTINGS ====================
   static const String olxCommunicationSettingsDetail = "$olxBaseUrl/bazaar-communication-settings/detail/";
   static const String olxCommunicationSettingsUpdate = "$olxBaseUrl/bazaar-communication-settings/update/";
-
-
-
 
   // ==================== AI ADMIN ENDPOINTS ====================
   static const String aiAdminDashboard = "$baseUrl/AI/admin/dashboard/";
@@ -360,8 +387,6 @@ class ApiUrls {
   static const String aiAdminMessages = "$baseUrl/AI/admin/messages/";
   static const String aiAdminAnalytics = "$baseUrl/AI/admin/analytics/";
   static const String aiAdminUsage = "$baseUrl/AI/admin/usage/";
-
-
 
   // ==================== SUBSCRIPTION PLANS google (ADMIN) ====================
   static const String subscriptionPlanCreate = "$baseUrl/admin_profile/subscription-plans/create/";
@@ -381,7 +406,6 @@ class ApiUrls {
 
   // ==================== PACKING MATERIAL ENQUIRY ====================
   static const String packingMaterialEnquiryList = "$baseUrl/shipping/packing-material-enquiry/list/";
-
 
   // ==================== PRODUCT BOOSTING PLANS ====================
   static const String boostingPlanCreate = "$baseUrl/product/boosting/plans/create/";

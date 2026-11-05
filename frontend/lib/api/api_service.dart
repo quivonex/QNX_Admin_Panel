@@ -12,7 +12,7 @@ import 'package:http_parser/http_parser.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import '../api/api_response.dart';
 import '../models/channel_partner/channel_partner_enquiry_model.dart';
-import '../models/marketing_partner/marketing_agreement_model.dart';
+
 import '../models/qnx_admin/bank_details_request.dart';
 import '../models/qnx_admin/complete_enquiry_count_model.dart';
 import '../models/qnx_admin/google_subscription_plan_model.dart';
@@ -46,7 +46,7 @@ import '../models/qnx_admin/amount_update_model.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../api/api_url.dart';
-import '../models/qnx_admin/marketing_head_model.dart';
+
 import 'package:image_picker/image_picker.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -71,6 +71,8 @@ import '../models/marketing_head/marketing_profile_model.dart';
 import 'marketing_service.dart' show MarketingProfileService;
 import '../models/qnx_admin/customer_subscription_plan_model.dart';
 import '../models/qnx_admin/boosting_plan_model.dart';
+import '../../models/qnx_admin/agreement_model.dart';
+
 
 
 //-------------------------------company create------------------------------------------------------------------------------------
@@ -1328,231 +1330,156 @@ Future<void> debugSharedPreferences() async {
 }
 
 // ============================================================
-// ✅ AGREEMENT SERVICE
-// ============================================================
-// ============================================================
-// ✅ AGREEMENT SERVICE
+// ✅ NEW AGREEMENT SERVICE - Complete Replacement
 // ============================================================
 class AgreementService {
+  // ============================================================
+  // COMPANY AGREEMENT - CREATE
+  // ============================================================
+  static Future<CompanyAgreementCreateResponse?> createCompanyAgreement(
+      CompanyAgreementCreateRequest request) async {
+    try {
+      var multipart = http.MultipartRequest(
+        'POST',
+        Uri.parse(ApiUrls.companyAgreementCreate),
+      )..headers.addAll({'Accept': 'application/json'});
 
-  // ✅ CREATE COMPANY AGREEMENT
-  static Future<AgreementResponse?> createAgreement(AgreementModel model) async {
-    var request = http.MultipartRequest(
-      'POST',
-      Uri.parse(ApiUrls.createAgreement),
-    );
+      multipart.fields['company'] = request.companyId.toString();
+      multipart.fields['agreement_start_date'] = request.agreementStartDate;
+      multipart.fields['agreement_end_date'] = request.agreementEndDate;
+      multipart.fields['company_owner_name'] = request.companyOwnerName;
+      multipart.fields['company_address'] = request.companyAddress;
+      multipart.fields['qnx_mart_representative'] = request.qnxMartRepresentative;
+      multipart.fields['additional_points'] = request.additionalPoints;
 
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('access_token');
-    request.headers.addAll({
-      'Authorization': 'Bearer $token',
-      'Accept': 'application/json',
-    });
+      if (request.sellerAdharNumber?.isNotEmpty ?? false) {
+        multipart.fields['seller_adhar_number'] = request.sellerAdharNumber!;
+      }
+      if (request.sellerPanNumber?.isNotEmpty ?? false) {
+        multipart.fields['seller_pan_number'] = request.sellerPanNumber!;
+      }
+      if (request.ownerAdharNumber?.isNotEmpty ?? false) {
+        multipart.fields['owner_adhar_number'] = request.ownerAdharNumber!;
+      }
+      if (request.ownerPanNumber?.isNotEmpty ?? false) {
+        multipart.fields['owner_pan_number'] = request.ownerPanNumber!;
+      }
+      if (request.remarks?.isNotEmpty ?? false) {
+        multipart.fields['remarks'] = request.remarks!;
+      }
+      if (request.agreementProducts.isNotEmpty) {
+        multipart.fields['agreement_products'] =
+            jsonEncode(request.agreementProducts.map((e) => e.toJson()).toList());
+      }
 
-    // Text fields
-    request.fields['agreement_number'] = model.agreementNumber ?? '';
-    request.fields['company'] = model.companyId.toString();
-    request.fields['agreement_role'] = model.agreementRole;
-    request.fields['apply_on_all_products'] = model.applyOnAllProducts.toString();
-    request.fields['agreement_start_date'] = model.agreementStartDate;
-    request.fields['agreement_end_date'] = model.agreementEndDate;
-    request.fields['company_owner_name'] = model.companyOwnerName;
-    request.fields['company_address'] = model.companyAddress;
+      if (request.qnxMartSign != null) {
+        multipart.files.add(http.MultipartFile.fromBytes(
+            'qnx_mart_sign_s3_key', request.qnxMartSign!,
+            filename: 'qnx_mart_sign.png', contentType: MediaType('image', 'png')));
+      }
+      if (request.qnxMartPicture != null) {
+        multipart.files.add(http.MultipartFile.fromBytes(
+            'qnx_mart_picture_s3_key', request.qnxMartPicture!,
+            filename: 'qnx_mart_picture.jpg', contentType: MediaType('image', 'jpeg')));
+      }
+      if (request.companyPicture != null) {
+        multipart.files.add(http.MultipartFile.fromBytes(
+            'company_picture_s3_key', request.companyPicture!,
+            filename: 'company_picture.jpg', contentType: MediaType('image', 'jpeg')));
+      }
+      if (request.uploadedAgreementPdf != null) {
+        multipart.files.add(http.MultipartFile.fromBytes(
+            'uploaded_agreement_pdf_s3_key', request.uploadedAgreementPdf!,
+            filename: 'agreement.pdf', contentType: MediaType('application', 'pdf')));
+      }
 
-    if (model.sellerAdharNumber != null && model.sellerAdharNumber!.isNotEmpty) {
-      request.fields['seller_adhar_number'] = model.sellerAdharNumber!;
-    }
-    if (model.ownerAdharNumber != null && model.ownerAdharNumber!.isNotEmpty) {
-      request.fields['owner_adhar_number'] = model.ownerAdharNumber!;
-    }
-    if (model.sellerPanNumber != null && model.sellerPanNumber!.isNotEmpty) {
-      request.fields['seller_pan_number'] = model.sellerPanNumber!;
-    }
-    if (model.ownerPanNumber != null && model.ownerPanNumber!.isNotEmpty) {
-      request.fields['owner_pan_number'] = model.ownerPanNumber!;
-    }
-    if (model.additionalPoints.isNotEmpty) {
-      request.fields['additional_points'] = model.additionalPoints;
-    }
-    if (model.qnxMartRepresentative.isNotEmpty) {
-      request.fields['qnx_mart_representative'] = model.qnxMartRepresentative;
-    }
-    if (model.remarks != null && model.remarks!.isNotEmpty) {
-      request.fields['remarks'] = model.remarks!;
-    }
-    if (model.profitSharePercentage.isNotEmpty) {
-      request.fields['profit_share_percentage'] = model.profitSharePercentage;
-    }
-    if (model.sellingCommissionPercentage.isNotEmpty) {
-      request.fields['selling_commission_percentage'] = model.sellingCommissionPercentage;
-    }
-    if (model.agreementProducts.isNotEmpty) {
-      request.fields['agreement_products'] = jsonEncode(model.agreementProducts);
-    }
+      print('📤 Create Company Agreement: ${ApiUrls.companyAgreementCreate}');
+      var streamed = await multipart.send();
+      var response = await http.Response.fromStream(streamed);
+      print('📥 Status: ${response.statusCode}');
+      print('📦 Body: ${response.body}');
 
-    // Files
-    if (model.qnxMartSign != null) {
-      request.files.add(http.MultipartFile.fromBytes(
-        'qnx_mart_sign_s3_key',
-        model.qnxMartSign!,
-        filename: 'qnx_mart_sign.png',
-        contentType: MediaType('image', 'png'),
-      ));
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return CompanyAgreementCreateResponse.fromJson(jsonDecode(response.body));
+      }
+      return CompanyAgreementCreateResponse(
+          success: false, message: 'Failed: ${response.statusCode}');
+    } catch (e) {
+      print('❌ Create Company Agreement Error: $e');
+      return CompanyAgreementCreateResponse(success: false, message: 'Error: $e');
     }
-    if (model.companySign != null) {
-      request.files.add(http.MultipartFile.fromBytes(
-        'company_sign_s3_key',
-        model.companySign!,
-        filename: 'company_sign.png',
-        contentType: MediaType('image', 'png'),
-      ));
-    }
-    if (model.qnxMartPicture != null) {
-      request.files.add(http.MultipartFile.fromBytes(
-        'qnx_mart_picture_s3_key',
-        model.qnxMartPicture!,
-        filename: 'qnx_mart_picture.jpg',
-        contentType: MediaType('image', 'jpeg'),
-      ));
-    }
-    if (model.companyPicture != null) {
-      request.files.add(http.MultipartFile.fromBytes(
-        'company_picture_s3_key',
-        model.companyPicture!,
-        filename: 'company_picture.jpg',
-        contentType: MediaType('image', 'jpeg'),
-      ));
-    }
-    if (model.uploadedAgreementPdf != null) {
-      request.files.add(http.MultipartFile.fromBytes(
-        'uploaded_agreement_pdf_s3_key',
-        model.uploadedAgreementPdf!,
-        filename: 'agreement.pdf',
-        contentType: MediaType('application', 'pdf'),
-      ));
-    }
-
-    print('========================================');
-    print('📤 Create Company Agreement: ${ApiUrls.createAgreement}');
-    print('📤 Fields: ${request.fields.length}');
-    print('📤 Files: ${request.files.length}');
-    print('========================================');
-
-    var streamedResponse = await request.send();
-    var response = await http.Response.fromStream(streamedResponse);
-
-    print("📥 Status: ${response.statusCode}");
-    print("📦 Response: ${response.body}");
-
-    if (response.statusCode == 200 || response.statusCode == 201) {
-      return AgreementResponse.fromJson(jsonDecode(response.body));
-    }
-    return null;
   }
 
-  // ✅ FETCH COMPANY AGREEMENTS
-  static Future<AgreementListResponse> fetchCompanyAgreements() async {
+  // ============================================================
+  // COMPANY AGREEMENT - LIST
+  // ============================================================
+  static Future<CompanyAgreementListResponse> fetchCompanyAgreements() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('access_token') ?? '';
-
       final response = await http.post(
         Uri.parse(ApiUrls.companyAgreementList),
-        headers: {
-          'Content-Type': 'application/json',
-          if (token.isNotEmpty) 'Authorization': 'Bearer $token',
-        },
+        headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
         body: jsonEncode({}),
       );
-
-      print("📤 Company Agreement List URL: ${ApiUrls.companyAgreementList}");
-      print("📥 Status: ${response.statusCode}");
-
+      print('📤 Company Agreement List: ${response.statusCode}');
       if (response.statusCode == 200) {
-        final jsonData = jsonDecode(response.body);
-        if (jsonData['data'] == null) jsonData['data'] = [];
-        return AgreementListResponse.fromJson(jsonData);
+        return CompanyAgreementListResponse.fromJson(jsonDecode(response.body));
       }
-      return AgreementListResponse(
-        status: 'error',
-        message: 'Failed: ${response.statusCode}',
-        total: 0,
-        data: [],
-      );
+      return CompanyAgreementListResponse(
+          success: false, message: 'Failed: ${response.statusCode}', count: 0, data: []);
     } catch (e) {
-      return AgreementListResponse(
-        status: 'error',
-        message: 'Error: $e',
-        total: 0,
-        data: [],
-      );
+      return CompanyAgreementListResponse(
+          success: false, message: 'Error: $e', count: 0, data: []);
     }
   }
 
-  // ✅ APPROVE COMPANY AGREEMENT
-  static Future<CompanyAgreementApproveResponse?> approveCompanyAgreement({
+  // ============================================================
+  // COMPANY AGREEMENT - APPROVE / REJECT
+  // ============================================================
+  static Future<AgreementActionResponse?> approveRejectCompanyAgreement({
     required int agreementId,
-    String? remarks,
+    required bool approve,
+    String? rejectionReason,
   }) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('access_token') ?? '';
-
-      final requestBody = {
+      final body = <String, dynamic>{
         'agreement_id': agreementId,
-        'status': 'approved',
-        if (remarks != null && remarks.isNotEmpty) 'remarks': remarks,
+        'status': approve ? 'approved' : 'rejected',
       };
+      if (!approve && rejectionReason != null && rejectionReason.isNotEmpty) {
+        body['rejection_reason'] = rejectionReason;
+      }
 
       final response = await http.post(
-        Uri.parse(ApiUrls.companyAgreementApprove),
-        headers: {
-          'Content-Type': 'application/json',
-          if (token.isNotEmpty) 'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode(requestBody),
+        Uri.parse(ApiUrls.companyAgreementApproveReject),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(body),
       );
-
-      print('📤 Approve Company: ${response.statusCode}');
-      print('📦 ${response.body}');
-
+      print('📤 Company Approve/Reject: ${response.statusCode}');
       if (response.statusCode == 200 || response.statusCode == 201) {
-        return CompanyAgreementApproveResponse.fromJson(jsonDecode(response.body));
+        return AgreementActionResponse.fromJson(jsonDecode(response.body));
       }
       return null;
     } catch (e) {
+      print('❌ Company Approve/Reject Error: $e');
       return null;
     }
   }
 
-  // ✅ REJECT COMPANY AGREEMENT
-  static Future<CompanyAgreementRejectResponse?> rejectCompanyAgreement({
+  // ============================================================
+  // COMPANY AGREEMENT - TERMINATE
+  // ============================================================
+  static Future<AgreementTerminateResponse?> terminateCompanyAgreement({
     required int agreementId,
-    required String rejectionReason,
+    required String reason,
   }) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('access_token') ?? '';
-
-      final requestBody = {
-        'agreement_id': agreementId,
-        'status': 'rejected',
-        'rejection_reason': rejectionReason,
-      };
-
       final response = await http.post(
-        Uri.parse(ApiUrls.companyAgreementReject),
-        headers: {
-          'Content-Type': 'application/json',
-          if (token.isNotEmpty) 'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode(requestBody),
+        Uri.parse(ApiUrls.companyAgreementTerminate),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'agreement_id': agreementId, 'rejection_reason': reason}),
       );
-
-      print('📤 Reject Company: ${response.statusCode}');
-
       if (response.statusCode == 200 || response.statusCode == 201) {
-        return CompanyAgreementRejectResponse.fromJson(jsonDecode(response.body));
+        return AgreementTerminateResponse.fromJson(jsonDecode(response.body));
       }
       return null;
     } catch (e) {
@@ -1560,266 +1487,145 @@ class AgreementService {
     }
   }
 
-  // ✅ UPDATE AGREEMENT PERCENTAGE
-  static Future<AgreementPercentageUpdateResponse> updateAgreementPercentage({
-    required int agreementId,
-    required double profitSharePercentage,
-    double? sellingCommissionPercentage,
-  }) async {
+  // ============================================================
+  // COMPANY AGREEMENT - DOWNLOAD PDF
+  // ============================================================
+  static Future<Uint8List?> downloadCompanyAgreementPdf(int agreementId) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('access_token') ?? '';
-
-      Map<String, dynamic> requestBody = {
-        'agreement_id': agreementId,
-        'profit_share_percentage': profitSharePercentage,
-      };
-      if (sellingCommissionPercentage != null) {
-        requestBody['selling_commission_percentage'] = sellingCommissionPercentage;
-      }
-
       final response = await http.post(
-        Uri.parse(ApiUrls.updateAgreementPercentage),
-        headers: {
-          'Content-Type': 'application/json',
-          if (token.isNotEmpty) 'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode(requestBody),
+        Uri.parse(ApiUrls.companyAgreementDownload),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'agreement_id': agreementId}),
       );
-
-      if (response.statusCode == 200) {
-        return AgreementPercentageUpdateResponse.fromJson(jsonDecode(response.body));
-      }
-      throw Exception('Failed to update percentage: ${response.statusCode}');
+      if (response.statusCode == 200) return response.bodyBytes;
+      return null;
     } catch (e) {
-      throw Exception('Error: $e');
+      print('❌ Download Company PDF Error: $e');
+      return null;
     }
   }
 
   // ============================================================
-  // ✅ MARKETING PARTNER AGREEMENT METHODS
+  // MARKETING PARTNER AGREEMENT - CREATE
   // ============================================================
-
-  // ✅ 1. FETCH LIST
-  static Future<MarketingPartnerAgreementListResponse>
-  fetchMarketingPartnerAgreements() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('access_token') ?? '';
-
-      final response = await http.post(
-        Uri.parse(ApiUrls.marketingPartnerAgreementList),
-        headers: {
-          'Content-Type': 'application/json',
-          if (token.isNotEmpty) 'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({}),
-      );
-
-      print('📤 MP Agreement List: ${ApiUrls.marketingPartnerAgreementList}');
-      print('📥 Status: ${response.statusCode}');
-      print('📦 Response: ${response.body}');
-
-      if (response.statusCode == 200) {
-        return MarketingPartnerAgreementListResponse.fromJson(
-            jsonDecode(response.body));
-      }
-      return MarketingPartnerAgreementListResponse(
-        success: false,
-        message: 'Failed: ${response.statusCode}',
-        count: 0,
-        data: [],
-      );
-    } catch (e) {
-      return MarketingPartnerAgreementListResponse(
-        success: false,
-        message: 'Error: $e',
-        count: 0,
-        data: [],
-      );
-    }
-  }
-
-  // ============================================================
-// ✅ MY MARKETING PARTNER AGREEMENTS (Marketing Partner साठी)
-// ============================================================
-  static Future<MarketingPartnerAgreementListResponse>
-  fetchMyMarketingPartnerAgreements() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('access_token') ?? '';
-
-      print('📤 Fetching My Marketing Partner Agreements');
-      print('URL: ${ApiUrls.myMarketingPartnerAgreements}');
-      print('Token: ${token.isNotEmpty ? "✅ Present" : "❌ Missing"}');
-
-      final response = await http.post(
-        Uri.parse(ApiUrls.myMarketingPartnerAgreements),
-        headers: {
-          'Content-Type': 'application/json',
-          if (token.isNotEmpty) 'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({}), // Empty body
-      );
-
-      print('📥 Status: ${response.statusCode}');
-      print('📦 Response: ${response.body}');
-
-      if (response.statusCode == 200) {
-        return MarketingPartnerAgreementListResponse.fromJson(
-            jsonDecode(response.body));
-      }
-
-      return MarketingPartnerAgreementListResponse(
-        success: false,
-        message: 'Failed: ${response.statusCode}',
-        count: 0,
-        data: [],
-      );
-    } catch (e) {
-      print('❌ Fetch My Agreements Error: $e');
-      return MarketingPartnerAgreementListResponse(
-        success: false,
-        message: 'Error: $e',
-        count: 0,
-        data: [],
-      );
-    }
-  }
-
-  // ✅ 2. CREATE
   static Future<MarketingPartnerAgreementCreateResponse?>
   createMarketingPartnerAgreement(
-      MarketingPartnerAgreementModel model) async {
+      MarketingPartnerAgreementCreateRequest request) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('access_token') ?? '';
-
-      var request = http.MultipartRequest(
+      var multipart = http.MultipartRequest(
         'POST',
         Uri.parse(ApiUrls.marketingPartnerAgreementCreate),
-      );
-      request.headers.addAll({
-        'Authorization': 'Bearer $token',
-        'Accept': 'application/json',
-      });
+      )..headers.addAll({'Accept': 'application/json'});
 
-      request.fields['agreement_number'] = model.agreementNumber;
-      request.fields['marketing_partner'] = model.marketingPartnerId.toString();
-      request.fields['agreement_role'] = model.agreementRole;
-      request.fields['agreement_start_date'] = model.agreementStartDate;
-      request.fields['agreement_end_date'] = model.agreementEndDate;
-      request.fields['marketing_partner_name'] = model.marketingPartnerName;
-      request.fields['marketing_partner_address'] = model.marketingPartnerAddress;
-      request.fields['company_commission_percentage'] = model.companyCommissionPercentage;
-      request.fields['profit_share_percentage'] = model.profitSharePercentage;
-      request.fields['selling_commission_percentage'] = model.sellingCommissionPercentage;
-      request.fields['additional_points'] = model.additionalPoints;
-      request.fields['qnx_mart_representative'] = model.qnxMartRepresentative;
-      if (model.adharNumber != null && model.adharNumber!.isNotEmpty) {
-        request.fields['adhar_number'] = model.adharNumber!;
+      multipart.fields['marketing_partner'] = request.marketingPartnerId.toString();
+      multipart.fields['agreement_start_date'] = request.agreementStartDate;
+      multipart.fields['agreement_end_date'] = request.agreementEndDate;
+      multipart.fields['marketing_partner_name'] = request.marketingPartnerName;
+      multipart.fields['marketing_partner_address'] = request.marketingPartnerAddress;
+      multipart.fields['company_commission_percentage'] =
+          request.companyCommissionPercentage;
+      multipart.fields['profit_share_percentage'] = request.profitSharePercentage;
+      multipart.fields['selling_commission_percentage'] =
+          request.sellingCommissionPercentage;
+      multipart.fields['qnx_mart_representative'] = request.qnxMartRepresentative;
+      multipart.fields['additional_points'] = request.additionalPoints;
+
+      if (request.adharNumber?.isNotEmpty ?? false) {
+        multipart.fields['adhar_number'] = request.adharNumber!;
       }
-      if (model.panNumber != null && model.panNumber!.isNotEmpty) {
-        request.fields['pan_number'] = model.panNumber!;
+      if (request.panNumber?.isNotEmpty ?? false) {
+        multipart.fields['pan_number'] = request.panNumber!;
       }
-      if (model.remarks != null && model.remarks!.isNotEmpty) {
-        request.fields['remarks'] = model.remarks!;
+      if (request.remarks?.isNotEmpty ?? false) {
+        multipart.fields['remarks'] = request.remarks!;
       }
 
-      if (model.qnxMartSign != null) {
-        request.files.add(http.MultipartFile.fromBytes(
-          'qnx_mart_sign_s3_key',
-          model.qnxMartSign!,
-          filename: 'qnx_mart_sign.png',
-          contentType: MediaType('image', 'png'),
-        ));
+      if (request.qnxMartSign != null) {
+        multipart.files.add(http.MultipartFile.fromBytes(
+            'qnx_mart_sign_s3_key', request.qnxMartSign!,
+            filename: 'qnx_mart_sign.png', contentType: MediaType('image', 'png')));
       }
-      if (model.marketingPartnerSign != null) {
-        request.files.add(http.MultipartFile.fromBytes(
-          'marketing_partner_sign_s3_key',
-          model.marketingPartnerSign!,
-          filename: 'marketing_partner_sign.png',
-          contentType: MediaType('image', 'png'),
-        ));
+      if (request.qnxMartPicture != null) {
+        multipart.files.add(http.MultipartFile.fromBytes(
+            'qnx_mart_picture_s3_key', request.qnxMartPicture!,
+            filename: 'qnx_mart_picture.jpg', contentType: MediaType('image', 'jpeg')));
       }
-      if (model.qnxMartPicture != null) {
-        request.files.add(http.MultipartFile.fromBytes(
-          'qnx_mart_picture_s3_key',
-          model.qnxMartPicture!,
-          filename: 'qnx_mart_picture.jpg',
-          contentType: MediaType('image', 'jpeg'),
-        ));
+      if (request.marketingPartnerPicture != null) {
+        multipart.files.add(http.MultipartFile.fromBytes(
+            'marketing_partner_picture_s3_key', request.marketingPartnerPicture!,
+            filename: 'partner_picture.jpg', contentType: MediaType('image', 'jpeg')));
       }
-      if (model.marketingPartnerPicture != null) {
-        request.files.add(http.MultipartFile.fromBytes(
-          'marketing_partner_picture_s3_key',
-          model.marketingPartnerPicture!,
-          filename: 'marketing_partner_picture.jpg',
-          contentType: MediaType('image', 'jpeg'),
-        ));
-      }
-      if (model.uploadedAgreementPdf != null) {
-        request.files.add(http.MultipartFile.fromBytes(
-          'uploaded_agreement_pdf_s3_key',
-          model.uploadedAgreementPdf!,
-          filename: 'agreement.pdf',
-          contentType: MediaType('application', 'pdf'),
-        ));
+      if (request.uploadedAgreementPdf != null) {
+        multipart.files.add(http.MultipartFile.fromBytes(
+            'uploaded_agreement_pdf_s3_key', request.uploadedAgreementPdf!,
+            filename: 'agreement.pdf', contentType: MediaType('application', 'pdf')));
       }
 
-      print('========================================');
       print('📤 Create MP Agreement: ${ApiUrls.marketingPartnerAgreementCreate}');
-      print('📤 Fields: ${request.fields.length}');
-      print('📤 Files: ${request.files.length}');
-      print('========================================');
-
-      var streamedResponse = await request.send();
-      var response = await http.Response.fromStream(streamedResponse);
-
+      var streamed = await multipart.send();
+      var response = await http.Response.fromStream(streamed);
       print('📥 Status: ${response.statusCode}');
-      print('📦 Response: ${response.body}');
+      print('📦 Body: ${response.body}');
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         return MarketingPartnerAgreementCreateResponse.fromJson(
             jsonDecode(response.body));
       }
-      return null;
+      return MarketingPartnerAgreementCreateResponse(
+          success: false, message: 'Failed: ${response.statusCode}');
     } catch (e) {
       print('❌ Create MP Agreement Error: $e');
-      return null;
+      return MarketingPartnerAgreementCreateResponse(
+          success: false, message: 'Error: $e');
     }
   }
 
-  // ✅ 3. APPROVE
-  static Future<MarketingPartnerAgreementApproveResponse?>
-  approveMarketingPartnerAgreement({
+  // ============================================================
+  // MARKETING PARTNER AGREEMENT - LIST
+  // ============================================================
+  static Future<MarketingPartnerAgreementListResponse>
+  fetchMarketingPartnerAgreements() async {
+    try {
+      final response = await http.post(
+        Uri.parse(ApiUrls.marketingPartnerAgreementList),
+        headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+        body: jsonEncode({}),
+      );
+      if (response.statusCode == 200) {
+        return MarketingPartnerAgreementListResponse.fromJson(
+            jsonDecode(response.body));
+      }
+      return MarketingPartnerAgreementListResponse(
+          success: false, message: 'Failed: ${response.statusCode}', count: 0, data: []);
+    } catch (e) {
+      return MarketingPartnerAgreementListResponse(
+          success: false, message: 'Error: $e', count: 0, data: []);
+    }
+  }
+
+  // ============================================================
+  // MARKETING PARTNER AGREEMENT - APPROVE / REJECT
+  // ============================================================
+  static Future<AgreementActionResponse?> approveRejectMarketingPartnerAgreement({
     required int agreementId,
-    String? remarks,
+    required bool approve,
+    String? rejectionReason,
   }) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('access_token') ?? '';
-
-      final body = {
+      final body = <String, dynamic>{
         'agreement_id': agreementId,
-        'status': 'approved',
-        if (remarks != null && remarks.isNotEmpty) 'remarks': remarks,
+        'status': approve ? 'approved' : 'rejected',
       };
-
+      if (!approve && rejectionReason != null && rejectionReason.isNotEmpty) {
+        body['rejection_reason'] = rejectionReason;
+      }
       final response = await http.post(
-        Uri.parse(ApiUrls.marketingPartnerAgreementApprove),
-        headers: {
-          'Content-Type': 'application/json',
-          if (token.isNotEmpty) 'Authorization': 'Bearer $token',
-        },
+        Uri.parse(ApiUrls.marketingPartnerAgreementApproveReject),
+        headers: {'Content-Type': 'application/json'},
         body: jsonEncode(body),
       );
-
-      print('📤 Approve MP Agreement: ${response.statusCode}');
-
       if (response.statusCode == 200 || response.statusCode == 201) {
-        return MarketingPartnerAgreementApproveResponse.fromJson(
-            jsonDecode(response.body));
+        return AgreementActionResponse.fromJson(jsonDecode(response.body));
       }
       return null;
     } catch (e) {
@@ -1827,47 +1633,64 @@ class AgreementService {
     }
   }
 
-  // ✅ 4. REJECT
-  static Future<MarketingPartnerAgreementRejectResponse?>
-  rejectMarketingPartnerAgreement({
+  // ============================================================
+  // MARKETING PARTNER AGREEMENT - TERMINATE
+  // ============================================================
+  static Future<AgreementTerminateResponse?> terminateMarketingPartnerAgreement({
     required int agreementId,
-    required String rejectionReason,
+    required String reason,
   }) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('access_token') ?? '';
-
-      final body = {
-        'agreement_id': agreementId,
-        'status': 'rejected',
-        'rejection_reason': rejectionReason,
-      };
-
       final response = await http.post(
-        Uri.parse(ApiUrls.marketingPartnerAgreementReject),
-        headers: {
-          'Content-Type': 'application/json',
-          if (token.isNotEmpty) 'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode(body),
+        Uri.parse(ApiUrls.marketingPartnerAgreementTerminate),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'agreement_id': agreementId, 'rejection_reason': reason}),
       );
-
-      print('📤 Reject MP Agreement: ${response.statusCode}');
-
       if (response.statusCode == 200 || response.statusCode == 201) {
-        return MarketingPartnerAgreementRejectResponse.fromJson(
-            jsonDecode(response.body));
+        return AgreementTerminateResponse.fromJson(jsonDecode(response.body));
       }
       return null;
     } catch (e) {
       return null;
     }
   }
+
+  // ============================================================
+  // MARKETING PARTNER AGREEMENT - DOWNLOAD PDF
+  // ============================================================
+  static Future<Uint8List?> downloadMarketingPartnerAgreementPdf(int agreementId) async {
+    try {
+      final response = await http.post(
+        Uri.parse(ApiUrls.marketingPartnerAgreementDownload),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'agreement_id': agreementId}),
+      );
+      if (response.statusCode == 200) return response.bodyBytes;
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // ============================================================
+  // SAMPLE AGREEMENT DOWNLOAD
+  // ============================================================
+  static Future<Uint8List?> downloadSampleAgreement(AgreementType type) async {
+    try {
+      final response = await http.post(
+        Uri.parse(ApiUrls.sampleAgreementDownload),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'type': type.apiType}),
+      );
+      if (response.statusCode == 200) return response.bodyBytes;
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+
 }
-
-// ============================================================
-// ✅ AGREEMENT LIST SERVICE
-// ============================================================
 
 
 //-----------------------------send registrationotp -----------------------------------------------------------------

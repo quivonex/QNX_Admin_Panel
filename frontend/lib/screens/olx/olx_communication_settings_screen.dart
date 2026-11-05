@@ -19,7 +19,12 @@ const Color _kWarning = Color(0xFFF59E0B);
 const Color _kPurple = Color(0xFF8B5CF6);
 
 class OlxCommunicationSettingsScreen extends StatefulWidget {
-  const OlxCommunicationSettingsScreen({super.key});
+  final bool embedded; // ✅ NEW
+
+  const OlxCommunicationSettingsScreen({
+    super.key,
+    this.embedded = false,
+  });
 
   @override
   State<OlxCommunicationSettingsScreen> createState() =>
@@ -203,7 +208,61 @@ class _OlxCommunicationSettingsScreenState
   }
 
   @override
+  @override
   Widget build(BuildContext context) {
+    // ✅ Shared body — दोन्ही modes साठी
+    final Widget body = _buildBody();
+
+    // ✅ Embedded mode (popup साठी) — Scaffold/AppBar नको
+    if (widget.embedded) {
+      return Container(
+        color: _kCanvas,
+        child: Column(
+          children: [
+            // Compact header bar
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              color: Colors.white,
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: _kBrand.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.forum, color: _kBrand, size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      "OLX Communication Settings",
+                      style: TextStyle(
+                        color: _kInk,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: _loadSettings,
+                    icon: const Icon(Icons.refresh, color: _kBrand, size: 20),
+                    tooltip: 'Refresh',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(child: body),
+          ],
+        ),
+      );
+    }
+
+    // Normal full-screen mode (unchanged)
     return Scaffold(
       backgroundColor: _kCanvas,
       appBar: AppBar(
@@ -226,7 +285,7 @@ class _OlxCommunicationSettingsScreenState
           ),
         ],
       ),
-      body: _buildBody(),
+      body: body,
     );
   }
 

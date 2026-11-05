@@ -12,7 +12,8 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../api/api_url.dart';
 import '../models/shiprocket/return_order_model.dart';
-
+import '../models/shiprocket/tracking_model.dart';
+import '../models/shiprocket/tracking_model.dart';
 
 
 class ShiprocketService {
@@ -383,6 +384,59 @@ class PrepaidCancelledOrdersService {
     } catch (e) {
       print('❌ Prepaid Cancelled Orders Error: $e');
       throw Exception('Error fetching prepaid cancelled orders: $e');
+    }
+  }
+
+  void dispose() {
+    _client.close();
+  }
+}
+
+// ==================== SHIPMENT TRACKING SERVICE ====================
+class ShipmentTrackingService {
+  final http.Client _client;
+
+  ShipmentTrackingService({http.Client? client})
+      : _client = client ?? http.Client();
+
+  Future<String?> _getToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('token') ?? prefs.getString('access_token');
+  }
+
+  /// Track shipment using shipment_id
+  Future<TrackShipmentResponse> trackShipment({
+    required String shipmentId,
+  }) async {
+    try {
+      final token = await _getToken();
+      final request = TrackShipmentRequest(shipmentId: shipmentId);
+
+      print('📤 Track Shipment Request: ${request.toJson()}');
+      print('📤 URL: ${ApiUrls.trackShipment}');
+
+      final response = await _client.post(
+        Uri.parse(ApiUrls.trackShipment),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          if (token != null) 'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode(request.toJson()),
+      );
+
+      print('📥 Track Shipment Status: ${response.statusCode}');
+      print('📦 Track Shipment Response: ${response.body}');
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final jsonData = jsonDecode(response.body);
+        return TrackShipmentResponse.fromJson(jsonData);
+      } else {
+        throw Exception('Failed to track shipment: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('❌ Track Shipment Error: $e');
+      throw Exception('Error tracking shipment: $e');
     }
   }
 

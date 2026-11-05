@@ -1,12 +1,29 @@
-// lib/screens/qnx_admin/olx_plan_screen.dart
+// lib/screens/olx/olx_plans_pricing_screen.dart
+//
+// OLX Plans & Pricing — ONE screen that replaces the two separate tabs
+// "OLX Plan" and "OLX Pricing".
+//
+// How it works (master → detail):
+//   1. Pick a plan on the left (or create a new one).
+//   2. On the right you see that plan and the price it has for every
+//      OLX category:  "Priced"  vs  "Not priced yet".
+//   3. Tap a not-priced category (or "Add Pricing") to set its price.
+//
+// Existing APIs / models are reused unchanged:
+//   OlxPlanPricingService.getPlans / createPlan / getPricingByPlan / createPricing
+//   OlxCategoryService.getCategories
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../../models/olx/olx_plan_model.dart';
+import 'package:intl/intl.dart';
+
 import '../../api/olx_service.dart';
+import '../../models/olx/olx_category_model.dart';
+import '../../models/olx/olx_plan_model.dart';
+import '../../models/olx/olx_pricing_model.dart';
 
 // ---------------------------------------------------------------------------
-// Screen palette — the same colours the existing Plan screen already uses.
+// Palette — same colours as the other OLX / Plan screens.
 // ---------------------------------------------------------------------------
 const Color _kBrand = Color(0xFF6366F1);
 const Color _kInk = Color(0xFF1E293B);
@@ -17,10 +34,23 @@ const Color _kBorder = Color(0xFFE2E8F0);
 const Color _kCanvas = Color(0xFFF8FAFC);
 const Color _kSuccess = Color(0xFF10B981);
 
+const List<Color> _kAccents = [
+  Color(0xFF10B981), // emerald
+  Color(0xFF0EA5E9), // sky
+  Color(0xFF1E3A5F), // deep navy
+  Color(0xFF6366F1), // indigo
+  Color(0xFF8B5CF6), // violet
+  Color(0xFFF59E0B), // amber
+];
+
+Color _accentFor(OlxPlanData plan) => _kAccents[plan.id.abs() % _kAccents.length];
+
 // ---------------------------------------------------------------------------
-// UI-only read helpers. They read the EXISTING model fields without changing
-// the model, and tolerate int / String / nullable shapes safely.
+// Helpers
 // ---------------------------------------------------------------------------
+
+// Tolerant readers (same approach as the old Plan screen) so the screen keeps
+// working whatever int / String / nullable shape the model uses.
 int _planDays(OlxPlanData plan) {
   final dynamic v = plan.durationDays;
   if (v is num) return v.toInt();
@@ -32,287 +62,250 @@ String _planDescription(OlxPlanData plan) {
   return v == null ? '' : v.toString().trim();
 }
 
-/// Returns the plan's active status if the response model exposes `isActive`,
-/// otherwise null (status badge + status filter are then hidden automatically).
-bool? _planStatus(OlxPlanData plan) {
-  try {
-    final dynamic d = plan;
-    final dynamic v = d.isActive;
-    if (v is bool) return v;
-    if (v is num) return v != 0;
-    if (v is String) {
-      final s = v.toLowerCase().trim();
-      if (s == 'true' || s == '1' || s == 'active') return true;
-      if (s == 'false' || s == '0' || s == 'inactive') return false;
-    }
-  } catch (_) {
-    // Field not present on the model — status UI stays hidden.
-  }
-  return null;
-}
-
 String _validityLabel(int days) {
-  if (days <= 0) return 'Validity not configured';
+  if (days <= 0) return 'Validity not set';
   if (days % 365 == 0) {
     final y = days ~/ 365;
-    return 'Valid for $y ${y == 1 ? 'year' : 'years'} ($days days)';
+    return '$y ${y == 1 ? 'year' : 'years'}';
   }
   if (days % 30 == 0) {
     final m = days ~/ 30;
-    return 'Valid for $m ${m == 1 ? 'month' : 'months'} ($days days)';
+    return '$m ${m == 1 ? 'month' : 'months'}';
   }
   if (days % 7 == 0) {
     final w = days ~/ 7;
-    return 'Valid for $w ${w == 1 ? 'week' : 'weeks'} ($days days)';
+    return '$w ${w == 1 ? 'week' : 'weeks'}';
   }
-  return 'Valid for $days ${days == 1 ? 'day' : 'days'}';
+  return '$days ${days == 1 ? 'day' : 'days'}';
 }
 
-class OlxPlanScreen extends StatefulWidget {
-  const OlxPlanScreen({super.key});
+String _formatPrice(String raw) {
+  final value = double.tryParse(raw) ?? 0;
+  return '₹${NumberFormat('#,##,##0.00', 'en_IN').format(value)}';
+}
+
+class OlxPlansPricingScreen extends StatefulWidget {
+  const OlxPlansPricingScreen({super.key});
 
   @override
-  State<OlxPlanScreen> createState() => _OlxPlanScreenState();
+  State<OlxPlansPricingScreen> createState() => _OlxPlansPricingScreenState();
 }
 
-class _OlxPlanScreenState extends State<OlxPlanScreen> {
-  final _formKey = GlobalKey<FormState>();
-
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _durationController = TextEditingController();
-  final TextEditingController _descriptionController = TextEditingController();
-  final TextEditingController _filterNameController = TextEditingController();
-
-  bool _isActive = true;
-  bool _isLoading = false;
-  bool _isCreating = false;
-  String? _loadError;
-  String? _formError;
-
+class _OlxPlansPricingScreenState extends State<OlxPlansPricingScreen> {
   final OlxPlanPricingService _service = OlxPlanPricingService();
+  final OlxCategoryService _categoryService = OlxCategoryService();
 
-  List<OlxPlanData> allPlans = [];
-  List<OlxPlanData> filteredPlans = [];
-  List<OlxPlanData> paginatedPlans = [];
+  final TextEditingController _planSearchController = TextEditingController();
+  final TextEditingController _pricingSearchController =
+  TextEditingController();
 
-  int currentPage = 1;
-  int itemsPerPage = 9;
-  int totalPages = 1;
-  final List<int> rowsPerPageOptions = [3, 6, 9, 12, 15, 30];
+  // ---- Data ----
+  List<OlxPlanData> _plans = [];
+  List<OlxCategory> _categories = [];
+  List<OlxPricingData> _pricing = [];
+  OlxPlanData? _selectedPlan;
 
-  String filterName = '';
-  String filterStatus = 'All';
-  bool _hasStatusField = false;
-  static const List<String> _statusOptions = ['All', 'Active', 'Inactive'];
+  // ---- Loading / error flags ----
+  bool _plansLoading = true;
+  bool _plansError = false;
+  bool _categoriesLoading = true;
+  bool _categoriesError = false;
+  bool _pricingLoading = false;
+  String? _pricingError;
+  int _pricingToken = 0; // ignores stale responses when plan changes quickly
 
-  // Handles to the open create dialog so its loading state rebuilds correctly.
-  StateSetter? _dialogSetState;
-  BuildContext? _dialogContext;
-
-  // Card accents — reference image tones (emerald / sky / navy) + existing palette.
-  static const List<Color> _cardAccents = [
-    Color(0xFF10B981), // emerald
-    Color(0xFF0EA5E9), // sky
-    Color(0xFF1E3A5F), // deep navy
-    Color(0xFF6366F1), // indigo (existing theme primary)
-    Color(0xFF8B5CF6), // violet
-    Color(0xFFF59E0B), // amber
-  ];
-
-  static const List<IconData> _cardIcons = [
-    Icons.assignment_outlined,
-    Icons.handshake_outlined,
-    Icons.savings_outlined,
-    Icons.workspace_premium_outlined,
-    Icons.rocket_launch_outlined,
-    Icons.star_outline_rounded,
-  ];
+  // ---- UI state ----
+  String _planQuery = '';
+  String _pricingQuery = '';
+  int _tab = 0; // 0 = priced, 1 = not priced yet
+  int _page = 1;
+  static const int _perPage = 8;
 
   @override
   void initState() {
     super.initState();
-    _loadPlans();
+    _loadAll();
   }
 
-  // ==================== LOAD (EXISTING API CALL PRESERVED) ====================
-  Future<void> _loadPlans() async {
+  @override
+  void dispose() {
+    _planSearchController.dispose();
+    _pricingSearchController.dispose();
+    _service.dispose();
+    _categoryService.dispose();
+    super.dispose();
+  }
+
+  // ======================================================================
+  // DATA LOADING
+  // ======================================================================
+  Future<void> _loadAll() async {
+    await Future.wait([_loadPlans(), _loadCategories()]);
+  }
+
+  Future<void> _loadPlans({int? selectPlanId}) async {
     setState(() {
-      _isLoading = true;
-      _loadError = null;
+      _plansLoading = true;
+      _plansError = false;
     });
     try {
       final response = await _service.getPlans();
-      if (mounted) {
-        setState(() {
-          allPlans = response.data..sort((a, b) => b.id.compareTo(a.id));
-          _hasStatusField = allPlans.any((p) => _planStatus(p) != null);
-          if (!_hasStatusField) filterStatus = 'All';
-          _isLoading = false;
-          applyFilters();
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-          _loadError =
-          'Plans could not be loaded. Check your connection and try again.';
-        });
-        _showSnackBar("Failed to load plans", isError: true);
-      }
-    }
-  }
-
-  bool get _hasActiveFilters => filterName.isNotEmpty || filterStatus != 'All';
-
-  void applyFilters() {
-    final query = filterName.trim().toLowerCase();
-    filteredPlans = allPlans.where((p) {
-      final matchesSearch = query.isEmpty ||
-          p.name.toLowerCase().contains(query) ||
-          _planDescription(p).toLowerCase().contains(query) ||
-          '${_planDays(p)}'.contains(query);
-
-      final status = _planStatus(p);
-      final matchesStatus = filterStatus == 'All' ||
-          (filterStatus == 'Active' && status == true) ||
-          (filterStatus == 'Inactive' && status == false);
-
-      return matchesSearch && matchesStatus;
-    }).toList();
-    applyPagination();
-  }
-
-  void applyPagination() {
-    if (filteredPlans.isEmpty) {
-      paginatedPlans = [];
-      totalPages = 1;
-      currentPage = 1;
-      setState(() {});
-      return;
-    }
-
-    totalPages = (filteredPlans.length / itemsPerPage).ceil();
-    if (currentPage > totalPages) currentPage = totalPages;
-    if (currentPage < 1) currentPage = 1;
-
-    int startIndex = (currentPage - 1) * itemsPerPage;
-    int endIndex = startIndex + itemsPerPage;
-    if (endIndex > filteredPlans.length) endIndex = filteredPlans.length;
-
-    paginatedPlans = filteredPlans.sublist(startIndex, endIndex);
-    setState(() {});
-  }
-
-  void nextPage() {
-    if (currentPage < totalPages) {
-      setState(() {
-        currentPage++;
-        applyPagination();
-      });
-    }
-  }
-
-  void previousPage() {
-    if (currentPage > 1) {
-      setState(() {
-        currentPage--;
-        applyPagination();
-      });
-    }
-  }
-
-  void goToPage(int page) {
-    if (page >= 1 && page <= totalPages) {
-      setState(() {
-        currentPage = page;
-        applyPagination();
-      });
-    }
-  }
-
-  void changeItemsPerPage(int? value) {
-    if (value != null) {
-      setState(() {
-        itemsPerPage = value;
-        currentPage = 1;
-        applyPagination();
-      });
-    }
-  }
-
-  void resetFilters() {
-    setState(() {
-      filterName = '';
-      filterStatus = 'All';
-      _filterNameController.clear();
-      currentPage = 1;
-      applyFilters();
-    });
-  }
-
-  // ==================== CREATE PLAN (EXISTING LOGIC PRESERVED) ====================
-  void _refreshDialog(VoidCallback fn) {
-    if (!mounted) return;
-    setState(fn);
-    _dialogSetState?.call(() {});
-  }
-
-  void _closeDialog() {
-    final ctx = _dialogContext;
-    if (ctx != null && Navigator.of(ctx).canPop()) {
-      Navigator.of(ctx).pop();
-    }
-  }
-
-  Future<void> _createPlan() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    _refreshDialog(() {
-      _isCreating = true;
-      _formError = null;
-    });
-
-    final request = OlxPlanRequest(
-      name: _nameController.text.trim(),
-      durationDays: int.tryParse(_durationController.text.trim()) ?? 0,
-      description: _descriptionController.text.trim(),
-      isActive: _isActive,
-    );
-
-    try {
-      final response = await _service.createPlan(request);
       if (!mounted) return;
-      _refreshDialog(() => _isCreating = false);
 
-      if (response.success) {
-        _clearForm();
-        _closeDialog(); // close popup
-        await _loadPlans();
-        _showSnackBar("Plan created successfully");
+      final list = [...response.data]..sort((a, b) {
+        final byDays = a.durationDays.compareTo(b.durationDays);
+        return byDays != 0 ? byDays : a.id.compareTo(b.id);
+      });
+
+      final failed = !response.success && list.isEmpty;
+
+      OlxPlanData? next;
+      if (list.isNotEmpty) {
+        final wantedId = selectPlanId ?? _selectedPlan?.id;
+        next = list.firstWhere(
+              (p) => p.id == wantedId,
+          orElse: () => list.first,
+        );
+      }
+
+      setState(() {
+        _plans = list;
+        _plansLoading = false;
+        _plansError = failed;
+        _selectedPlan = next;
+      });
+
+      if (next != null) {
+        await _loadPricing(next);
       } else {
-        _refreshDialog(() => _formError = response.message);
-        _showSnackBar(response.message, isError: true);
+        setState(() {
+          _pricing = [];
+          _pricingError = null;
+        });
       }
     } catch (e) {
       if (!mounted) return;
-      _refreshDialog(() {
-        _isCreating = false;
-        _formError = "Error: $e";
+      setState(() {
+        _plansLoading = false;
+        _plansError = true;
       });
-      _showSnackBar("Error: $e", isError: true);
+      _showSnackBar('Failed to load plans', isError: true);
     }
   }
 
-  void _clearForm() {
-    _nameController.clear();
-    _durationController.clear();
-    _descriptionController.clear();
-    _isActive = true;
-    _formError = null;
-    _formKey.currentState?.reset();
+  Future<void> _loadCategories() async {
+    setState(() {
+      _categoriesLoading = true;
+      _categoriesError = false;
+    });
+    try {
+      final response = await _categoryService.getCategories();
+      if (!mounted) return;
+      final list = [...response.data]
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      setState(() {
+        _categories = list;
+        _categoriesLoading = false;
+        _categoriesError = !response.success && list.isEmpty;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _categoriesLoading = false;
+        _categoriesError = true;
+      });
+    }
   }
 
+  Future<void> _loadPricing(OlxPlanData plan) async {
+    final token = ++_pricingToken;
+    setState(() {
+      _pricingLoading = true;
+      _pricingError = null;
+    });
+    try {
+      final response = await _service.getPricingByPlan(plan.id);
+      if (!mounted || token != _pricingToken) return;
+
+      final list = [...response.data]..sort((a, b) =>
+          _categoryNameOf(a).toLowerCase().compareTo(
+            _categoryNameOf(b).toLowerCase(),
+          ));
+
+      setState(() {
+        _pricing = list;
+        _pricingLoading = false;
+        // Service returns a non-empty message only when the request failed.
+        _pricingError =
+        (!response.success && response.message.isNotEmpty && list.isEmpty)
+            ? response.message
+            : null;
+      });
+    } catch (e) {
+      if (!mounted || token != _pricingToken) return;
+      setState(() {
+        _pricingLoading = false;
+        _pricingError = 'Pricing could not be loaded.';
+      });
+    }
+  }
+
+  void _selectPlan(OlxPlanData plan) {
+    if (_selectedPlan?.id == plan.id) return;
+    setState(() {
+      _selectedPlan = plan;
+      _pricing = [];
+      _tab = 0;
+      _page = 1;
+      _pricingQuery = '';
+      _pricingSearchController.clear();
+    });
+    _loadPricing(plan);
+  }
+
+  // ======================================================================
+  // DERIVED DATA
+  // ======================================================================
+  String _categoryNameOf(OlxPricingData p) {
+    final name = (p.categoryName ?? '').trim();
+    if (name.isNotEmpty) return name;
+    for (final c in _categories) {
+      if (c.id == p.categoryId) return c.name;
+    }
+    return 'Category #${p.categoryId}';
+  }
+
+  Set<int> get _pricedCategoryIds => _pricing.map((p) => p.categoryId).toSet();
+
+  List<OlxCategory> get _unpricedCategories {
+    final priced = _pricedCategoryIds;
+    return _categories.where((c) => !priced.contains(c.id)).toList();
+  }
+
+  List<OlxPlanData> get _visiblePlans {
+    final q = _planQuery.trim().toLowerCase();
+    if (q.isEmpty) return _plans;
+    return _plans
+        .where((p) =>
+    p.name.toLowerCase().contains(q) ||
+        '${p.durationDays}'.contains(q) ||
+        (p.description ?? '').toLowerCase().contains(q))
+        .toList();
+  }
+
+  List<OlxPricingData> get _visiblePricing {
+    final q = _pricingQuery.trim().toLowerCase();
+    if (q.isEmpty) return _pricing;
+    return _pricing
+        .where((p) =>
+    _categoryNameOf(p).toLowerCase().contains(q) ||
+        '${p.price}'.contains(q))
+        .toList();
+  }
+
+  // ======================================================================
+  // SNACKBAR
+  // ======================================================================
   void _showSnackBar(String message, {bool isError = false}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -335,634 +328,364 @@ class _OlxPlanScreenState extends State<OlxPlanScreen> {
     );
   }
 
-  // ==================== CREATE PLAN POPUP ====================
+  // ======================================================================
+  // CREATE PLAN DIALOG
+  // ======================================================================
   Future<void> _openCreatePlanDialog() async {
-    _clearForm();
+    final formKey = GlobalKey<FormState>();
+    final nameController = TextEditingController();
+    final daysController = TextEditingController();
+    final descController = TextEditingController();
+    bool isActive = true;
+    bool submitting = false;
+    String? formError;
+
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) {
-        _dialogContext = dialogContext;
         return StatefulBuilder(
           builder: (context, setDialogState) {
-            _dialogSetState = setDialogState;
-            return _buildCreateDialog(context, setDialogState);
+            Future<void> submit() async {
+              if (!formKey.currentState!.validate()) return;
+              setDialogState(() {
+                submitting = true;
+                formError = null;
+              });
+              final response = await _service.createPlan(
+                OlxPlanRequest(
+                  name: nameController.text.trim(),
+                  durationDays: int.tryParse(daysController.text.trim()) ?? 0,
+                  description: descController.text.trim(),
+                  isActive: isActive,
+                ),
+              );
+              if (!mounted) return;
+              if (response.success) {
+                Navigator.of(dialogContext).pop();
+                _showSnackBar('Plan created successfully');
+                await _loadPlans(selectPlanId: response.data?.id);
+                // If the API did not return the new id, jump to the newest plan.
+                if (response.data == null && _plans.isNotEmpty) {
+                  final newest = _plans.reduce((a, b) => a.id > b.id ? a : b);
+                  _selectPlan(newest);
+                }
+              } else {
+                setDialogState(() {
+                  submitting = false;
+                  formError = response.message;
+                });
+              }
+            }
+
+            return _DialogShell(
+              icon: Icons.post_add_rounded,
+              title: 'Create Plan',
+              subtitle: 'Add a new plan, then set its price per category',
+              submitting: submitting,
+              submitLabel: 'Create Plan',
+              submittingLabel: 'Creating...',
+              submitIcon: Icons.add_rounded,
+              onSubmit: submit,
+              onCancel: () => Navigator.of(dialogContext).pop(),
+              child: Form(
+                key: formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (formError != null) ...[
+                      _ErrorBanner(message: formError!),
+                      const SizedBox(height: 16),
+                    ],
+                    _LabeledField(
+                      label: 'Plan Name',
+                      required: true,
+                      child: TextFormField(
+                        controller: nameController,
+                        enabled: !submitting,
+                        textInputAction: TextInputAction.next,
+                        style: const TextStyle(fontSize: 14, color: _kInk),
+                        decoration: _inputDecoration(
+                          hint: 'e.g. Premium',
+                          icon: Icons.label_outline,
+                        ),
+                        validator: (v) => (v == null || v.trim().isEmpty)
+                            ? 'Plan Name is required'
+                            : null,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    _LabeledField(
+                      label: 'Duration (Days)',
+                      required: true,
+                      child: TextFormField(
+                        controller: daysController,
+                        enabled: !submitting,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                        style: const TextStyle(fontSize: 14, color: _kInk),
+                        decoration: _inputDecoration(
+                          hint: 'e.g. 30',
+                          icon: Icons.timer_outlined,
+                        ),
+                        validator: (v) {
+                          final days = int.tryParse((v ?? '').trim());
+                          if (days == null || days <= 0) {
+                            return 'Enter a valid number of days';
+                          }
+                          return null;
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    _LabeledField(
+                      label: 'Description',
+                      required: false,
+                      child: TextFormField(
+                        controller: descController,
+                        enabled: !submitting,
+                        maxLines: 3,
+                        style: const TextStyle(fontSize: 14, color: _kInk),
+                        decoration: _inputDecoration(
+                          hint: 'What does this plan include?',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    _ActiveSwitchTile(
+                      value: isActive,
+                      enabled: !submitting,
+                      onChanged: (v) => setDialogState(() => isActive = v),
+                    ),
+                  ],
+                ),
+              ),
+            );
           },
         );
       },
     );
-    _dialogSetState = null;
-    _dialogContext = null;
+
+    nameController.dispose();
+    daysController.dispose();
+    descController.dispose();
   }
 
-  Widget _buildCreateDialog(BuildContext context, StateSetter setDialogState) {
-    final theme = Theme.of(context);
-    final media = MediaQuery.of(context).size;
-    final isSmall = media.width < 640;
-    final dialogWidth =
-    isSmall ? media.width : (media.width < 1024 ? 560.0 : 640.0);
+  // ======================================================================
+  // ADD PRICING DIALOG
+  // ======================================================================
+  Future<void> _openAddPricingDialog({OlxCategory? preselect}) async {
+    final plan = _selectedPlan;
+    if (plan == null) return;
 
-    final cancelButton = OutlinedButton(
-      onPressed: _isCreating
-          ? null
-          : () {
-        _clearForm();
-        Navigator.of(context).pop();
-      },
-      style: OutlinedButton.styleFrom(
-        foregroundColor: _kBody,
-        side: const BorderSide(color: _kBorder),
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ),
-      child: const Text("Cancel"),
-    );
+    if (_categoriesLoading) {
+      _showSnackBar('Categories are still loading, please wait a moment.');
+      return;
+    }
+    final available = _unpricedCategories;
+    if (_categories.isEmpty) {
+      _showSnackBar(
+        'No OLX categories found. Create a category first.',
+        isError: true,
+      );
+      return;
+    }
+    if (available.isEmpty) {
+      _showSnackBar('Every category already has a price for this plan.');
+      return;
+    }
 
-    final createButton = FilledButton.icon(
-      onPressed: _isCreating ? null : _createPlan,
-      style: FilledButton.styleFrom(
-        backgroundColor: _kBrand,
-        foregroundColor: Colors.white,
-        disabledBackgroundColor: _kBrand.withOpacity(0.6),
-        disabledForegroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ),
-      icon: _isCreating
-          ? const SizedBox(
-        width: 18,
-        height: 18,
-        child: CircularProgressIndicator(
-          color: Colors.white,
-          strokeWidth: 2,
-        ),
-      )
-          : const Icon(Icons.add_rounded, size: 20),
-      label: Text(
-        _isCreating ? "Creating..." : "Create Plan",
-        style: const TextStyle(fontWeight: FontWeight.w600),
-      ),
-    );
+    final formKey = GlobalKey<FormState>();
+    final priceController = TextEditingController();
+    OlxCategory? category = (preselect != null && available.contains(preselect))
+        ? preselect
+        : null;
+    bool isActive = true;
+    bool submitting = false;
+    String? formError;
+    final accent = _accentFor(plan);
 
-    return Dialog(
-      insetPadding: EdgeInsets.symmetric(
-        horizontal: isSmall ? 12 : 24,
-        vertical: 24,
-      ),
-      backgroundColor: Colors.white,
-      surfaceTintColor: Colors.transparent,
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: dialogWidth,
-          maxHeight: media.height * 0.9,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Header
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 20, 12, 16),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: _kBrand.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(Icons.post_add_rounded,
-                        color: _kBrand, size: 22),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          "Create Plan",
-                          style: theme.textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.w700,
-                            color: _kInk,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          "Configure a new subscription plan",
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: _kMuted,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'Close',
-                    onPressed: _isCreating
-                        ? null
-                        : () {
-                      _clearForm();
-                      Navigator.of(context).pop();
-                    },
-                    icon: const Icon(Icons.close_rounded, color: _kMuted),
-                  ),
-                ],
-              ),
-            ),
-            const Divider(height: 1, color: _kBorder),
-
-            // Scrollable form body
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (_formError != null) ...[
-                        _buildFormErrorBanner(_formError!),
-                        const SizedBox(height: 18),
-                      ],
-                      _buildSectionLabel("Plan details"),
-                      const SizedBox(height: 14),
-                      if (isSmall) ...[
-                        _buildNameField(),
-                        const SizedBox(height: 16),
-                        _buildDurationField(),
-                      ] else
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(child: _buildNameField()),
-                            const SizedBox(width: 16),
-                            Expanded(child: _buildDurationField()),
-                          ],
-                        ),
-                      const SizedBox(height: 16),
-                      _buildTextField(
-                        _descriptionController,
-                        "Description",
-                        Icons.description_outlined,
-                        maxLines: 3,
-                        isRequired: false,
-                        hint: "What does this plan include?",
-                      ),
-                      const SizedBox(height: 24),
-                      _buildSectionLabel("Availability"),
-                      const SizedBox(height: 14),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 12),
-                        decoration: BoxDecoration(
-                          color: _kCanvas,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: _kBorder),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              _isActive
-                                  ? Icons.check_circle_outline_rounded
-                                  : Icons.pause_circle_outline_rounded,
-                              color: _isActive ? _kSuccess : _kMuted,
-                              size: 22,
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    "Active status",
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                      color: _kInk,
-                                      fontSize: 14,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    _isActive
-                                        ? "This plan will be saved as active"
-                                        : "This plan will be saved as inactive",
-                                    style: const TextStyle(
-                                      color: _kMuted,
-                                      fontSize: 12.5,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Switch(
-                              value: _isActive,
-                              activeTrackColor: _kBrand,
-                              onChanged: _isCreating
-                                  ? null
-                                  : (v) {
-                                setState(() => _isActive = v);
-                                setDialogState(() {});
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            Future<void> submit() async {
+              if (!formKey.currentState!.validate()) return;
+              setDialogState(() {
+                submitting = true;
+                formError = null;
+              });
+              final response = await _service.createPricing(
+                OlxPricingRequest(
+                  categoryId: category!.id,
+                  planId: plan.id,
+                  price: num.tryParse(priceController.text.trim()) ?? 0,
+                  isActive: isActive,
                 ),
-              ),
-            ),
+              );
+              if (!mounted) return;
+              if (response.success) {
+                Navigator.of(dialogContext).pop();
+                _showSnackBar('Pricing added for ${category!.name}');
+                if (_selectedPlan?.id == plan.id) {
+                  await _loadPricing(plan);
+                }
+              } else {
+                setDialogState(() {
+                  submitting = false;
+                  formError = response.message;
+                });
+              }
+            }
 
-            const Divider(height: 1, color: _kBorder),
-
-            // Footer actions
-            Container(
-              color: _kCanvas,
-              padding: const EdgeInsets.fromLTRB(24, 14, 24, 18),
-              child: Row(
-                children: isSmall
-                    ? [
-                  Expanded(child: cancelButton),
-                  const SizedBox(width: 12),
-                  Expanded(child: createButton),
-                ]
-                    : [
-                  Expanded(
-                    child: Text.rich(
-                      TextSpan(
+            return _DialogShell(
+              icon: Icons.price_change_outlined,
+              title: 'Add Pricing',
+              subtitle: 'Set the price of a category for this plan',
+              submitting: submitting,
+              submitLabel: 'Save Pricing',
+              submittingLabel: 'Saving...',
+              submitIcon: Icons.check_rounded,
+              onSubmit: submit,
+              onCancel: () => Navigator.of(dialogContext).pop(),
+              child: Form(
+                key: formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (formError != null) ...[
+                      _ErrorBanner(message: formError!),
+                      const SizedBox(height: 16),
+                    ],
+                    // Plan (read-only)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: accent.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: accent.withOpacity(0.25)),
+                      ),
+                      child: Row(
                         children: [
-                          TextSpan(
-                            text: '* ',
-                            style: TextStyle(
-                              color: theme.colorScheme.error,
-                              fontWeight: FontWeight.w700,
+                          Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: accent,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.workspace_premium_outlined,
+                                color: Colors.white, size: 18),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Plan',
+                                  style:
+                                  TextStyle(fontSize: 11.5, color: _kMuted),
+                                ),
+                                Text(
+                                  '${plan.name}  •  ${_validityLabel(_planDays(plan))}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w700,
+                                    color: _kInk,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          const TextSpan(text: 'Required fields'),
                         ],
                       ),
-                      style:
-                      const TextStyle(color: _kMuted, fontSize: 12.5),
                     ),
-                  ),
-                  cancelButton,
-                  const SizedBox(width: 12),
-                  createButton,
-                ],
+                    const SizedBox(height: 18),
+                    _LabeledField(
+                      label: 'Category',
+                      required: true,
+                      child: DropdownButtonFormField<OlxCategory>(
+                        value: category,
+                        isExpanded: true,
+                        borderRadius: BorderRadius.circular(12),
+                        icon: const Icon(Icons.keyboard_arrow_down_rounded,
+                            color: _kMuted),
+                        decoration: _inputDecoration(
+                          hint: 'Choose a category',
+                          icon: Icons.category_outlined,
+                        ),
+                        items: available
+                            .map((c) => DropdownMenuItem<OlxCategory>(
+                          value: c,
+                          child: Text(c.name,
+                              overflow: TextOverflow.ellipsis),
+                        ))
+                            .toList(),
+                        onChanged: submitting
+                            ? null
+                            : (v) => setDialogState(() => category = v),
+                        validator: (v) =>
+                        v == null ? 'Please select a category' : null,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${available.length} of ${_categories.length} categories still need a price.',
+                      style: const TextStyle(fontSize: 12, color: _kMuted),
+                    ),
+                    const SizedBox(height: 16),
+                    _LabeledField(
+                      label: 'Price (₹)',
+                      required: true,
+                      child: TextFormField(
+                        controller: priceController,
+                        enabled: !submitting,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                        ],
+                        style: const TextStyle(fontSize: 14, color: _kInk),
+                        decoration: _inputDecoration(
+                          hint: 'e.g. 499',
+                          icon: Icons.currency_rupee_rounded,
+                        ),
+                        validator: (v) {
+                          final text = (v ?? '').trim();
+                          if (text.isEmpty) return 'Price is required';
+                          final price = double.tryParse(text);
+                          if (price == null) return 'Enter a valid price';
+                          if (price < 0) return 'Price cannot be negative';
+                          return null;
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    _ActiveSwitchTile(
+                      value: isActive,
+                      enabled: !submitting,
+                      onChanged: (v) => setDialogState(() => isActive = v),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNameField() {
-    return _buildTextField(
-      _nameController,
-      "Plan Name",
-      Icons.label_outline,
-      hint: "e.g. Premium",
-    );
-  }
-
-  Widget _buildDurationField() {
-    return _buildTextField(
-      _durationController,
-      "Duration (Days)",
-      Icons.timer_outlined,
-      keyboardType: TextInputType.number,
-      hint: "e.g. 30",
-      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-      validator: (v) {
-        final text = (v ?? '').trim();
-        if (text.isEmpty) return "Duration (Days) is required";
-        final days = int.tryParse(text);
-        if (days == null || days <= 0) return "Enter a valid number of days";
-        return null;
-      },
-    );
-  }
-
-  Widget _buildSectionLabel(String text) {
-    return Row(
-      children: [
-        Text(
-          text,
-          style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w700,
-            color: _kInk,
-          ),
-        ),
-        const SizedBox(width: 12),
-        const Expanded(child: Divider(height: 1, color: _kBorder)),
-      ],
-    );
-  }
-
-  Widget _buildFormErrorBanner(String message) {
-    final errorColor = Theme.of(context).colorScheme.error;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: errorColor.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: errorColor.withOpacity(0.3)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.error_outline, color: errorColor, size: 20),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              message,
-              style: TextStyle(color: errorColor, fontSize: 13, height: 1.4),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTextField(
-      TextEditingController controller,
-      String label,
-      IconData icon, {
-        int maxLines = 1,
-        TextInputType keyboardType = TextInputType.text,
-        bool isRequired = true,
-        String? hint,
-        List<TextInputFormatter>? inputFormatters,
-        String? Function(String?)? validator,
-      }) {
-    final errorColor = Theme.of(context).colorScheme.error;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text.rich(
-          TextSpan(
-            children: [
-              TextSpan(text: label),
-              if (isRequired)
-                TextSpan(text: ' *', style: TextStyle(color: errorColor))
-              else
-                const TextSpan(
-                  text: '  (optional)',
-                  style: TextStyle(
-                    color: _kFaint,
-                    fontWeight: FontWeight.w400,
-                  ),
-                ),
-            ],
-          ),
-          style: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: _kInk,
-          ),
-        ),
-        const SizedBox(height: 8),
-        TextFormField(
-          controller: controller,
-          maxLines: maxLines,
-          keyboardType: keyboardType,
-          inputFormatters: inputFormatters,
-          enabled: !_isCreating,
-          style: const TextStyle(fontSize: 14, color: _kInk),
-          validator: validator ??
-              (isRequired
-                  ? (v) => (v == null || v.trim().isEmpty)
-                  ? "$label is required"
-                  : null
-                  : null),
-          decoration: InputDecoration(
-            hintText: hint,
-            hintStyle: const TextStyle(color: _kFaint, fontSize: 13.5),
-            prefixIcon: maxLines > 1
-                ? null
-                : Icon(icon, color: _kMuted, size: 20),
-            filled: true,
-            fillColor: _kCanvas,
-            contentPadding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: _kBorder),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: _kBorder),
-            ),
-            disabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: _kBorder),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: _kBrand, width: 1.6),
-            ),
-            errorBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: errorColor),
-            ),
-            focusedErrorBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: errorColor, width: 1.6),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  // ==================== PLAN DETAILS (READ-ONLY, EXISTING DATA) ====================
-  Future<void> _showPlanDetails(
-      OlxPlanData plan, Color accent, IconData icon) {
-    final status = _planStatus(plan);
-    final days = _planDays(plan);
-    final description = _planDescription(plan);
-
-    return showDialog<void>(
-      context: context,
-      builder: (ctx) {
-        final theme = Theme.of(ctx);
-        final isSmall = MediaQuery.of(ctx).size.width < 640;
-        return Dialog(
-          insetPadding: EdgeInsets.symmetric(
-            horizontal: isSmall ? 12 : 24,
-            vertical: 24,
-          ),
-          backgroundColor: Colors.white,
-          surfaceTintColor: Colors.transparent,
-          clipBehavior: Clip.antiAlias,
-          shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: 480,
-              maxHeight: MediaQuery.of(ctx).size.height * 0.85,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 20, 12, 16),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: accent,
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(icon, color: Colors.white, size: 22),
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              plan.name,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.titleLarge?.copyWith(
-                                fontWeight: FontWeight.w700,
-                                color: _kInk,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              "Plan #${plan.id}",
-                              style: const TextStyle(
-                                  color: _kMuted, fontSize: 13),
-                            ),
-                          ],
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: 'Close',
-                        onPressed: () => Navigator.of(ctx).pop(),
-                        icon: const Icon(Icons.close_rounded, color: _kMuted),
-                      ),
-                    ],
-                  ),
-                ),
-                const Divider(height: 1, color: _kBorder),
-                Flexible(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(24, 22, 24, 6),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _detailRow(
-                          Icons.schedule_rounded,
-                          "Duration",
-                          value: _validityLabel(days),
-                        ),
-                        if (status != null)
-                          _detailRow(
-                            Icons.toggle_on_outlined,
-                            "Status",
-                            valueWidget: _StatusBadge(active: status),
-                          ),
-                        _detailRow(
-                          Icons.notes_rounded,
-                          "Description",
-                          value: description.isEmpty
-                              ? "No description provided"
-                              : description,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const Divider(height: 1, color: _kBorder),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 14, 24, 18),
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: FilledButton(
-                      onPressed: () => Navigator.of(ctx).pop(),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: _kBrand,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 24, vertical: 16),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10)),
-                      ),
-                      child: const Text("Close"),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
+            );
+          },
         );
       },
     );
+
+    priceController.dispose();
   }
 
-  Widget _detailRow(IconData icon, String label,
-      {String? value, Widget? valueWidget}) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 18),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: _kCanvas,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _kBorder),
-            ),
-            child: Icon(icon, size: 18, color: _kMuted),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w600,
-                    color: _kMuted,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                valueWidget ??
-                    Text(
-                      value ?? '',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: _kInk,
-                        height: 1.45,
-                      ),
-                    ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ==================== BUILD ====================
+  // ======================================================================
+  // BUILD
+  // ======================================================================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -971,28 +694,24 @@ class _OlxPlanScreenState extends State<OlxPlanScreen> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final width = constraints.maxWidth;
+            final isWide = width >= 960;
             final isMobile = width < 700;
-            final horizontalPadding = isMobile ? 16.0 : 32.0;
-            final contentWidth =
-            (width - horizontalPadding * 2).clamp(0.0, 1280.0).toDouble();
+            final pad = isMobile ? 16.0 : 28.0;
 
             return SingleChildScrollView(
               padding: EdgeInsets.symmetric(
-                horizontal: horizontalPadding,
-                vertical: isMobile ? 20 : 28,
+                horizontal: pad,
+                vertical: isMobile ? 18 : 26,
               ),
               child: Center(
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 1280),
+                  constraints: const BoxConstraints(maxWidth: 1360),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      _buildPageHeader(contentWidth < 420),
+                      _buildHeader(isMobile),
                       const SizedBox(height: 22),
-                      _buildFilterSection(contentWidth),
-                      const SizedBox(height: 28),
-                      _buildPlansSection(contentWidth),
-                      const SizedBox(height: 8),
+                      _buildBody(isWide),
                     ],
                   ),
                 ),
@@ -1004,21 +723,15 @@ class _OlxPlanScreenState extends State<OlxPlanScreen> {
     );
   }
 
-  int _columnsFor(double width) {
-    if (width >= 1080) return 3;
-    if (width >= 700) return 2;
-    return 1;
-  }
-
-  // ==================== PAGE HEADER ====================
-  Widget _buildPageHeader(bool isCompact) {
+  // ---------------------------------------------------------------- header
+  Widget _buildHeader(bool isMobile) {
     final theme = Theme.of(context);
 
-    final titleBlock = Column(
+    final title = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          "Plans",
+          'OLX Plans & Pricing',
           style: theme.textTheme.headlineSmall?.copyWith(
             color: _kInk,
             fontWeight: FontWeight.w700,
@@ -1027,13 +740,26 @@ class _OlxPlanScreenState extends State<OlxPlanScreen> {
         ),
         const SizedBox(height: 4),
         Text(
-          "Manage and configure your subscription plans",
+          'Create plans and set what each category pays — all in one place',
           style: theme.textTheme.bodyMedium?.copyWith(color: _kMuted),
         ),
       ],
     );
 
-    final createButton = FilledButton.icon(
+    final refresh = OutlinedButton.icon(
+      onPressed: (_plansLoading || _pricingLoading) ? null : _loadAll,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: _kBody,
+        side: const BorderSide(color: _kBorder),
+        backgroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      icon: const Icon(Icons.refresh_rounded, size: 18),
+      label: const Text('Refresh'),
+    );
+
+    final create = FilledButton.icon(
       onPressed: _openCreatePlanDialog,
       style: FilledButton.styleFrom(
         backgroundColor: _kBrand,
@@ -1045,553 +771,852 @@ class _OlxPlanScreenState extends State<OlxPlanScreen> {
         textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
       ),
       icon: const Icon(Icons.add_rounded, size: 20),
-      label: const Text("Create Plan"),
+      label: const Text('Create Plan'),
     );
 
-    if (isCompact) {
+    if (isMobile) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          titleBlock,
-          const SizedBox(height: 16),
-          SizedBox(width: double.infinity, child: createButton),
+          title,
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(child: refresh),
+              const SizedBox(width: 10),
+              Expanded(child: create),
+            ],
+          ),
         ],
       );
     }
 
     return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Expanded(child: titleBlock),
+        Expanded(child: title),
         const SizedBox(width: 16),
-        createButton,
+        refresh,
+        const SizedBox(width: 12),
+        create,
       ],
     );
   }
 
-  // ==================== FILTER SECTION ====================
-  InputDecoration _filterDecoration({
-    required String label,
-    required IconData icon,
-    String? hint,
-  }) {
-    return InputDecoration(
-      labelText: label,
-      hintText: hint,
-      floatingLabelBehavior: FloatingLabelBehavior.always,
-      isDense: true,
-      labelStyle: const TextStyle(color: _kMuted, fontSize: 13),
-      hintStyle: const TextStyle(color: _kFaint, fontSize: 13.5),
-      prefixIcon: Icon(icon, size: 18, color: _kMuted),
-      prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-      filled: true,
-      fillColor: _kCanvas,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: _kBorder),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: _kBorder),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: _kBrand, width: 1.5),
-      ),
-    );
-  }
-
-  Widget _buildDropdown<T>({
-    required String label,
-    required IconData icon,
-    required T value,
-    required List<T> items,
-    required ValueChanged<T?> onChanged,
-  }) {
-    return InputDecorator(
-      decoration: _filterDecoration(label: label, icon: icon),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<T>(
-          value: value,
-          isExpanded: true,
-          isDense: true,
-          borderRadius: BorderRadius.circular(12),
-          dropdownColor: Colors.white,
-          icon: const Icon(Icons.keyboard_arrow_down_rounded,
-              size: 20, color: _kMuted),
-          style: const TextStyle(fontSize: 14, color: _kInk),
-          items: items
-              .map((e) => DropdownMenuItem<T>(value: e, child: Text('$e')))
-              .toList(),
-          onChanged: onChanged,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFilterSection(double contentWidth) {
-    final isWide = contentWidth >= 920;
-    final isMobile = contentWidth < 600;
-
-    final searchField = TextField(
-      controller: _filterNameController,
-      style: const TextStyle(fontSize: 14, color: _kInk),
-      decoration: _filterDecoration(
-        label: "Search plans",
-        hint: "Name, description or duration",
-        icon: Icons.search_rounded,
-      ).copyWith(
-        suffixIcon: filterName.isNotEmpty
-            ? IconButton(
-          tooltip: 'Clear search',
-          icon: const Icon(Icons.close_rounded, size: 18),
-          onPressed: () {
-            _filterNameController.clear();
-            setState(() {
-              filterName = '';
-              currentPage = 1;
-              applyFilters();
-            });
-          },
-        )
-            : null,
-      ),
-      onChanged: (value) {
-        setState(() {
-          filterName = value;
-          currentPage = 1;
-          applyFilters();
-        });
-      },
-    );
-
-    final Widget? statusField = _hasStatusField
-        ? _buildDropdown<String>(
-      label: "Status",
-      icon: Icons.toggle_on_outlined,
-      value: filterStatus,
-      items: _statusOptions,
-      onChanged: (v) {
-        if (v == null) return;
-        setState(() {
-          filterStatus = v;
-          currentPage = 1;
-          applyFilters();
-        });
-      },
-    )
-        : null;
-
-    final perPageField = _buildDropdown<int>(
-      label: "Per page",
-      icon: Icons.grid_view_rounded,
-      value: itemsPerPage,
-      items: rowsPerPageOptions,
-      onChanged: changeItemsPerPage,
-    );
-
-    final clearButton = OutlinedButton.icon(
-      onPressed: _hasActiveFilters ? resetFilters : null,
-      style: OutlinedButton.styleFrom(
-        foregroundColor: _kBody,
-        side: const BorderSide(color: _kBorder),
-        minimumSize: const Size(0, 48),
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-      icon: const Icon(Icons.filter_alt_off_outlined, size: 18),
-      label: const Text("Clear filters"),
-    );
-
-    Widget body;
-    if (isWide) {
-      body = Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Expanded(child: searchField),
-          if (statusField != null) ...[
-            const SizedBox(width: 12),
-            SizedBox(width: 190, child: statusField),
-          ],
-          const SizedBox(width: 12),
-          SizedBox(width: 150, child: perPageField),
-          const SizedBox(width: 12),
-          clearButton,
-        ],
-      );
-    } else if (isMobile) {
-      body = Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          searchField,
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              if (statusField != null) ...[
-                Expanded(child: statusField),
-                const SizedBox(width: 12),
-              ],
-              Expanded(child: perPageField),
-            ],
-          ),
-          const SizedBox(height: 12),
-          clearButton,
-        ],
-      );
-    } else {
-      body = Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          searchField,
-          const SizedBox(height: 12),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              if (statusField != null) ...[
-                Expanded(child: statusField),
-                const SizedBox(width: 12),
-              ],
-              Expanded(child: perPageField),
-              const SizedBox(width: 12),
-              clearButton,
-            ],
-          ),
-        ],
-      );
+  // ------------------------------------------------------------------ body
+  Widget _buildBody(bool isWide) {
+    if (_plansLoading && _plans.isEmpty) {
+      return const _LoadingCard(label: 'Loading plans...');
     }
 
-    return Container(
-      padding: EdgeInsets.all(isMobile ? 14 : 16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _kBorder),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: body,
-    );
-  }
-
-  // ==================== PLANS SECTION (CARDS) ====================
-  Widget _buildPlansSection(double contentWidth) {
-    final columns = _columnsFor(contentWidth);
-
-    if (_isLoading) {
-      return _PlanSkeletonRow(columns: columns);
-    }
-
-    if (_loadError != null && allPlans.isEmpty) {
+    if (_plansError && _plans.isEmpty) {
       return _StateCard(
         icon: Icons.cloud_off_outlined,
         iconColor: Theme.of(context).colorScheme.error,
-        title: "Unable to load plans",
-        message: _loadError!,
-        action: OutlinedButton.icon(
-          onPressed: _loadPlans,
-          style: OutlinedButton.styleFrom(
-            foregroundColor: _kBrand,
-            side: const BorderSide(color: _kBorder),
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-            shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        title: 'Could not load plans',
+        message:
+        'Check your connection and try again. If no plan exists yet, create your first one.',
+        actions: [
+          OutlinedButton.icon(
+            onPressed: _loadAll,
+            icon: const Icon(Icons.refresh_rounded, size: 18),
+            label: const Text('Try again'),
           ),
-          icon: const Icon(Icons.refresh_rounded, size: 18),
-          label: const Text("Try again"),
-        ),
+          FilledButton.icon(
+            onPressed: _openCreatePlanDialog,
+            style: FilledButton.styleFrom(backgroundColor: _kBrand),
+            icon: const Icon(Icons.add_rounded, size: 18),
+            label: const Text('Create Plan'),
+          ),
+        ],
       );
     }
 
-    if (filteredPlans.isEmpty) {
-      final noData = allPlans.isEmpty;
+    if (_plans.isEmpty) {
       return _StateCard(
-        icon: noData ? Icons.inventory_2_outlined : Icons.search_off_rounded,
+        icon: Icons.workspace_premium_outlined,
         iconColor: _kBrand,
-        title: "No plans found",
-        message: noData
-            ? "Create your first subscription plan to get started."
-            : "No plans match your search or status filter. Change the filters or clear them to see all plans.",
-        action: noData
-            ? FilledButton.icon(
-          onPressed: _openCreatePlanDialog,
-          style: FilledButton.styleFrom(
-            backgroundColor: _kBrand,
-            foregroundColor: Colors.white,
-            padding:
-            const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10)),
+        title: 'No plans yet',
+        message:
+        'Start by creating a plan (for example 30 days). After that you can set a price for every category.',
+        actions: [
+          FilledButton.icon(
+            onPressed: _openCreatePlanDialog,
+            style: FilledButton.styleFrom(backgroundColor: _kBrand),
+            icon: const Icon(Icons.add_rounded, size: 18),
+            label: const Text('Create your first plan'),
           ),
-          icon: const Icon(Icons.add_rounded, size: 18),
-          label: const Text("Create Plan"),
-        )
-            : OutlinedButton.icon(
-          onPressed: resetFilters,
-          style: OutlinedButton.styleFrom(
-            foregroundColor: _kBody,
-            side: const BorderSide(color: _kBorder),
-            padding:
-            const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10)),
-          ),
-          icon: const Icon(Icons.filter_alt_off_outlined, size: 18),
-          label: const Text("Clear filters"),
-        ),
+        ],
+      );
+    }
+
+    final detail = _buildPlanDetail();
+
+    if (isWide) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 340, child: _buildPlanList()),
+          const SizedBox(width: 24),
+          Expanded(child: detail),
+        ],
       );
     }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _buildResultsBar(),
+        _buildPlanPickerCompact(),
         const SizedBox(height: 18),
-        _PlanCardsGrid(
-          plans: paginatedPlans,
-          columns: columns,
-          accentColors: _cardAccents,
-          icons: _cardIcons,
-          onView: _showPlanDetails,
-        ),
-        const SizedBox(height: 28),
-        _buildPagination(),
+        detail,
       ],
     );
   }
 
-  Widget _buildResultsBar() {
-    return Row(
-      children: [
-        Text(
-          "All plans",
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.w700,
-            color: _kInk,
+  // ------------------------------------------------- plan list (wide, left)
+  Widget _buildPlanList() {
+    final plans = _visiblePlans;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: _cardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Text(
+                'Plans',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: _kInk,
+                ),
+              ),
+              const SizedBox(width: 8),
+              _CountPill(count: _plans.length),
+              const Spacer(),
+              if (_plansLoading)
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+            ],
           ),
-        ),
-        const SizedBox(width: 10),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-          decoration: BoxDecoration(
-            color: _kBrand.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(20),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _planSearchController,
+            style: const TextStyle(fontSize: 14, color: _kInk),
+            decoration: _inputDecoration(
+              hint: 'Search plans',
+              icon: Icons.search_rounded,
+            ).copyWith(
+              isDense: true,
+              suffixIcon: _planQuery.isNotEmpty
+                  ? IconButton(
+                icon: const Icon(Icons.close_rounded, size: 18),
+                onPressed: () {
+                  _planSearchController.clear();
+                  setState(() => _planQuery = '');
+                },
+              )
+                  : null,
+            ),
+            onChanged: (v) => setState(() => _planQuery = v),
           ),
-          child: Text(
-            "${filteredPlans.length}",
-            style: const TextStyle(
-              color: Color(0xFF4338CA),
-              fontWeight: FontWeight.w700,
-              fontSize: 12.5,
+          const SizedBox(height: 12),
+          if (plans.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 28),
+              child: Center(
+                child: Text(
+                  'No plan matches your search',
+                  style: TextStyle(color: _kMuted, fontSize: 13),
+                ),
+              ),
+            )
+          else
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 620),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: plans.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (context, i) {
+                  final plan = plans[i];
+                  return _PlanTile(
+                    plan: plan,
+                    accent: _accentFor(plan),
+                    selected: _selectedPlan?.id == plan.id,
+                    onTap: () => _selectPlan(plan),
+                  );
+                },
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // ---------------------------------------- plan picker (mobile / tablet)
+  Widget _buildPlanPickerCompact() {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      decoration: _cardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Row(
+              children: [
+                const Text(
+                  'Choose a plan',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: _kInk,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _CountPill(count: _plans.length),
+              ],
             ),
           ),
-        ),
-        if (_hasActiveFilters) ...[
-          const SizedBox(width: 10),
-          Flexible(
-            child: Text(
-              "filtered from ${allPlans.length}",
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: _kMuted, fontSize: 13),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 46,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              itemCount: _plans.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (context, i) {
+                final plan = _plans[i];
+                final accent = _accentFor(plan);
+                final selected = _selectedPlan?.id == plan.id;
+                return ChoiceChip(
+                  selected: selected,
+                  showCheckmark: false,
+                  onSelected: (_) => _selectPlan(plan),
+                  selectedColor: accent,
+                  backgroundColor: _kCanvas,
+                  side: BorderSide(color: selected ? accent : _kBorder),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  label: Text(
+                    '${plan.name} • ${_validityLabel(_planDays(plan))}',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      color: selected ? Colors.white : _kBody,
+                    ),
+                  ),
+                );
+              },
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // --------------------------------------------------------- plan detail
+  Widget _buildPlanDetail() {
+    final plan = _selectedPlan;
+    if (plan == null) {
+      return const _StateCard(
+        icon: Icons.touch_app_outlined,
+        iconColor: _kBrand,
+        title: 'Select a plan',
+        message: 'Pick a plan to see and manage its category prices.',
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildHero(plan),
+        const SizedBox(height: 18),
+        _buildPricingPanel(plan),
       ],
     );
   }
 
-  // ==================== PAGINATION ====================
-  Widget _buildPagination() {
-    final total = filteredPlans.length;
-    final start = total == 0 ? 0 : (currentPage - 1) * itemsPerPage + 1;
-    final end = currentPage * itemsPerPage > total
-        ? total
-        : currentPage * itemsPerPage;
+  Widget _buildHero(OlxPlanData plan) {
+    final accent = _accentFor(plan);
+    final total = _categories.length;
+    final priced = _categories
+        .where((c) => _pricedCategoryIds.contains(c.id))
+        .length;
+    final progress = total == 0 ? 0.0 : priced / total;
+    final desc = _planDescription(plan);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _kBorder),
-      ),
-      child: Wrap(
-        alignment: WrapAlignment.spaceBetween,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: 12,
-        runSpacing: 12,
-        children: [
-          Text.rich(
-            TextSpan(
-              children: [
-                const TextSpan(text: "Showing "),
-                TextSpan(
-                  text: "$start–$end",
-                  style: const TextStyle(
-                      color: _kInk, fontWeight: FontWeight.w600),
-                ),
-                const TextSpan(text: " of "),
-                TextSpan(
-                  text: "$total",
-                  style: const TextStyle(
-                      color: _kInk, fontWeight: FontWeight.w600),
-                ),
-                TextSpan(text: total == 1 ? " plan" : " plans"),
-              ],
-            ),
-            style: const TextStyle(fontSize: 13, color: _kMuted),
+        borderRadius: BorderRadius.circular(20),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [accent, Color.lerp(accent, Colors.black, 0.28)!],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: accent.withOpacity(0.28),
+            blurRadius: 22,
+            offset: const Offset(0, 10),
           ),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            crossAxisAlignment: WrapCrossAlignment.center,
+        ],
+      ),
+      child: LayoutBuilder(
+        builder: (context, c) {
+          final narrow = c.maxWidth < 560;
+
+          final info = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildPageButtonPrevNext(prev: true),
-              ..._buildPageNumbers(),
-              _buildPageButtonPrevNext(prev: false),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text(
+                    plan.name,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                  _HeroChip(
+                    icon: Icons.schedule_rounded,
+                    label: _validityLabel(_planDays(plan)),
+                  ),
+                  _HeroChip(
+                    icon: Icons.tag_rounded,
+                    label: '${_planDays(plan)} days',
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                desc.isEmpty ? 'No description provided' : desc,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.85),
+                  fontSize: 13.5,
+                  height: 1.45,
+                  fontStyle: desc.isEmpty ? FontStyle.italic : FontStyle.normal,
+                ),
+              ),
+            ],
+          );
+
+          final coverage = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _categoriesLoading
+                          ? 'Checking categories...'
+                          : '$priced of $total categories priced',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '${(progress * 100).round()}%',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LinearProgressIndicator(
+                  value: _categoriesLoading ? null : progress,
+                  minHeight: 8,
+                  backgroundColor: Colors.white.withOpacity(0.25),
+                  valueColor:
+                  const AlwaysStoppedAnimation<Color>(Colors.white),
+                ),
+              ),
+            ],
+          );
+
+          final addButton = FilledButton.icon(
+            onPressed: _pricingLoading ? null : () => _openAddPricingDialog(),
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.white,
+              foregroundColor: accent,
+              padding:
+              const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+              textStyle: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            icon: const Icon(Icons.add_rounded, size: 20),
+            label: const Text('Add Pricing'),
+          );
+
+          if (narrow) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                info,
+                const SizedBox(height: 18),
+                coverage,
+                const SizedBox(height: 16),
+                SizedBox(width: double.infinity, child: addButton),
+              ],
+            );
+          }
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: info),
+                  const SizedBox(width: 16),
+                  addButton,
+                ],
+              ),
+              const SizedBox(height: 20),
+              coverage,
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  // ----------------------------------------------------- pricing panel
+  Widget _buildPricingPanel(OlxPlanData plan) {
+    final unpriced = _unpricedCategories;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: _cardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.sell_outlined, color: _kBrand, size: 20),
+              const SizedBox(width: 8),
+              const Text(
+                'Category pricing',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: _kInk,
+                ),
+              ),
+              const Spacer(),
+              if (_pricingLoading)
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: SegmentedButton<int>(
+              showSelectedIcon: false,
+              style: SegmentedButton.styleFrom(
+                selectedBackgroundColor: _kBrand,
+                selectedForegroundColor: Colors.white,
+                foregroundColor: _kBody,
+                side: const BorderSide(color: _kBorder),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+              segments: [
+                ButtonSegment<int>(
+                  value: 0,
+                  icon: const Icon(Icons.check_circle_outline_rounded,
+                      size: 18),
+                  label: Text('Priced (${_pricing.length})'),
+                ),
+                ButtonSegment<int>(
+                  value: 1,
+                  icon: const Icon(Icons.pending_outlined, size: 18),
+                  label: Text(
+                    _categoriesLoading
+                        ? 'Not priced yet'
+                        : 'Not priced yet (${unpriced.length})',
+                  ),
+                ),
+              ],
+              selected: {_tab},
+              onSelectionChanged: (s) => setState(() {
+                _tab = s.first;
+                _page = 1;
+              }),
+            ),
+          ),
+          const SizedBox(height: 16),
+          if (_pricingError != null)
+            _InlineMessage(
+              icon: Icons.error_outline,
+              color: Theme.of(context).colorScheme.error,
+              message: _pricingError!,
+              actionLabel: 'Retry',
+              onAction: () => _loadPricing(plan),
+            )
+          else if (_tab == 0)
+            _buildPricedList(plan)
+          else
+            _buildUnpricedList(unpriced),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPricedList(OlxPlanData plan) {
+    if (_pricingLoading && _pricing.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 40),
+        child: Center(child: CircularProgressIndicator(color: _kBrand)),
+      );
+    }
+
+    if (_pricing.isEmpty) {
+      return _InlineEmpty(
+        icon: Icons.price_change_outlined,
+        title: 'No prices set for this plan yet',
+        message:
+        'Add a price for each category so users know what this plan costs.',
+        actionLabel: 'Add first price',
+        onAction: () => _openAddPricingDialog(),
+      );
+    }
+
+    final filtered = _visiblePricing;
+    final totalPages =
+    (filtered.length / _perPage).ceil().clamp(1, 9999).toInt();
+    final page = _page.clamp(1, totalPages).toInt();
+    final start = (page - 1) * _perPage;
+    final end = (start + _perPage) > filtered.length
+        ? filtered.length
+        : start + _perPage;
+    final pageItems = filtered.isEmpty
+        ? <OlxPricingData>[]
+        : filtered.sublist(start, end);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          controller: _pricingSearchController,
+          style: const TextStyle(fontSize: 14, color: _kInk),
+          decoration: _inputDecoration(
+            hint: 'Search category or price',
+            icon: Icons.search_rounded,
+          ).copyWith(
+            isDense: true,
+            suffixIcon: _pricingQuery.isNotEmpty
+                ? IconButton(
+              icon: const Icon(Icons.close_rounded, size: 18),
+              onPressed: () {
+                _pricingSearchController.clear();
+                setState(() {
+                  _pricingQuery = '';
+                  _page = 1;
+                });
+              },
+            )
+                : null,
+          ),
+          onChanged: (v) => setState(() {
+            _pricingQuery = v;
+            _page = 1;
+          }),
+        ),
+        const SizedBox(height: 14),
+        if (filtered.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 28),
+            child: Center(
+              child: Text(
+                'No category matches your search',
+                style: TextStyle(color: _kMuted, fontSize: 13),
+              ),
+            ),
+          )
+        else
+          LayoutBuilder(
+            builder: (context, c) {
+              final twoCols = c.maxWidth >= 640;
+              const gap = 12.0;
+              final itemWidth =
+              twoCols ? (c.maxWidth - gap) / 2 : c.maxWidth;
+              return Wrap(
+                spacing: gap,
+                runSpacing: gap,
+                children: [
+                  for (final p in pageItems)
+                    SizedBox(
+                      width: itemWidth,
+                      child: _PricingTile(
+                        name: _categoryNameOf(p),
+                        slug: p.categorySlug,
+                        price: _formatPrice('${p.price}'),
+                        active: p.isActive,
+                        accent: _accentFor(plan),
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+        if (filtered.length > _perPage) ...[
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Showing ${start + 1}–$end of ${filtered.length}',
+                  style: const TextStyle(fontSize: 13, color: _kMuted),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Previous page',
+                onPressed: page > 1 ? () => setState(() => _page = page - 1) : null,
+                icon: const Icon(Icons.chevron_left_rounded),
+                color: _kBrand,
+              ),
+              Text(
+                '$page / $totalPages',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: _kInk,
+                  fontSize: 13,
+                ),
+              ),
+              IconButton(
+                tooltip: 'Next page',
+                onPressed: page < totalPages
+                    ? () => setState(() => _page = page + 1)
+                    : null,
+                icon: const Icon(Icons.chevron_right_rounded),
+                color: _kBrand,
+              ),
             ],
           ),
         ],
-      ),
+      ],
     );
   }
 
-  List<Widget> _buildPageNumbers() {
-    if (totalPages <= 5) {
-      return List.generate(totalPages, (index) => _buildPageButton(index + 1));
-    } else if (currentPage <= 3) {
-      return [
-        ...List.generate(4, (index) => _buildPageButton(index + 1)),
-        _buildEllipsis(),
-        _buildPageButton(totalPages),
-      ];
-    } else if (currentPage >= totalPages - 2) {
-      return [
-        _buildPageButton(1),
-        _buildEllipsis(),
-        ...List.generate(
-            4, (index) => _buildPageButton(totalPages - 3 + index)),
-      ];
-    } else {
-      return [
-        _buildPageButton(1),
-        _buildEllipsis(),
-        _buildPageButton(currentPage - 1),
-        _buildPageButton(currentPage),
-        _buildPageButton(currentPage + 1),
-        _buildEllipsis(),
-        _buildPageButton(totalPages),
-      ];
+  Widget _buildUnpricedList(List<OlxCategory> unpriced) {
+    if (_categoriesLoading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 40),
+        child: Center(child: CircularProgressIndicator(color: _kBrand)),
+      );
     }
-  }
 
-  Widget _buildPageButtonPrevNext({required bool prev}) {
-    final enabled = prev ? currentPage > 1 : currentPage < totalPages;
-    return SizedBox(
-      width: 36,
-      height: 36,
-      child: IconButton(
-        tooltip: prev ? 'Previous page' : 'Next page',
-        icon: Icon(
-          prev ? Icons.chevron_left_rounded : Icons.chevron_right_rounded,
-          size: 20,
-        ),
-        onPressed: enabled ? (prev ? previousPage : nextPage) : null,
-        color: _kBrand,
-        disabledColor: _kFaint,
-        padding: EdgeInsets.zero,
-        style: IconButton.styleFrom(
-          side: const BorderSide(color: _kBorder),
-          shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        ),
-      ),
-    );
-  }
+    if (_categoriesError) {
+      return _InlineMessage(
+        icon: Icons.error_outline,
+        color: Theme.of(context).colorScheme.error,
+        message: 'Categories could not be loaded.',
+        actionLabel: 'Retry',
+        onAction: _loadCategories,
+      );
+    }
 
-  Widget _buildPageButton(int pageNum) {
-    final selected = currentPage == pageNum;
-    final shape =
-    RoundedRectangleBorder(borderRadius: BorderRadius.circular(8));
-    return SizedBox(
-      width: 36,
-      height: 36,
-      child: selected
-          ? FilledButton(
-        onPressed: () => goToPage(pageNum),
-        style: FilledButton.styleFrom(
-          backgroundColor: _kBrand,
-          foregroundColor: Colors.white,
-          padding: EdgeInsets.zero,
-          minimumSize: const Size(36, 36),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          shape: shape,
-        ),
-        child: Text(
-          '$pageNum',
-          style:
-          const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-        ),
-      )
-          : TextButton(
-        onPressed: () => goToPage(pageNum),
-        style: TextButton.styleFrom(
-          foregroundColor: _kInk,
-          padding: EdgeInsets.zero,
-          minimumSize: const Size(36, 36),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          shape: shape,
-        ),
-        child: Text(
-          '$pageNum',
-          style:
-          const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-        ),
-      ),
-    );
-  }
+    if (_categories.isEmpty) {
+      return const _InlineEmpty(
+        icon: Icons.category_outlined,
+        title: 'No OLX categories yet',
+        message: 'Create OLX categories first, then come back to set prices.',
+      );
+    }
 
-  Widget _buildEllipsis() {
-    return const SizedBox(
-      width: 20,
-      height: 36,
-      child: Center(
-        child: Text(
-          "...",
+    if (unpriced.isEmpty) {
+      return const _InlineEmpty(
+        icon: Icons.verified_outlined,
+        iconColor: _kSuccess,
+        title: 'All categories are priced',
+        message: 'Every OLX category has a price for this plan.',
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Tap a category to set its price',
           style: TextStyle(fontSize: 13, color: _kMuted),
         ),
-      ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            for (final c in unpriced)
+              InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => _openAddPricingDialog(preselect: c),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: _kCanvas,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: _kBorder),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          c.name,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w600,
+                            color: _kInk,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      const Icon(Icons.add_circle_outline_rounded,
+                          size: 18, color: _kBrand),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ],
     );
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _durationController.dispose();
-    _descriptionController.dispose();
-    _filterNameController.dispose();
-    _service.dispose();
-    super.dispose();
   }
 }
 
-// ==================== STATUS BADGE ====================
+// ===========================================================================
+// SHARED STYLE HELPERS
+// ===========================================================================
+BoxDecoration _cardDecoration() => BoxDecoration(
+  color: Colors.white,
+  borderRadius: BorderRadius.circular(16),
+  border: Border.all(color: _kBorder),
+  boxShadow: [
+    BoxShadow(
+      color: Colors.black.withOpacity(0.03),
+      blurRadius: 10,
+      offset: const Offset(0, 4),
+    ),
+  ],
+);
+
+InputDecoration _inputDecoration({String? hint, IconData? icon}) {
+  OutlineInputBorder border(Color color, [double width = 1]) =>
+      OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: color, width: width),
+      );
+  return InputDecoration(
+    hintText: hint,
+    hintStyle: const TextStyle(color: _kFaint, fontSize: 13.5),
+    prefixIcon: icon == null ? null : Icon(icon, color: _kMuted, size: 20),
+    filled: true,
+    fillColor: _kCanvas,
+    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+    border: border(_kBorder),
+    enabledBorder: border(_kBorder),
+    disabledBorder: border(_kBorder),
+    focusedBorder: border(_kBrand, 1.6),
+    errorBorder: border(Colors.red.shade400),
+    focusedErrorBorder: border(Colors.red.shade400, 1.6),
+  );
+}
+
+// ===========================================================================
+// SMALL WIDGETS
+// ===========================================================================
+class _CountPill extends StatelessWidget {
+  final int count;
+  const _CountPill({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
+      decoration: BoxDecoration(
+        color: _kBrand.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        '$count',
+        style: const TextStyle(
+          color: Color(0xFF4338CA),
+          fontWeight: FontWeight.w700,
+          fontSize: 12,
+        ),
+      ),
+    );
+  }
+}
+
+class _HeroChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  const _HeroChip({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.18),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: Colors.white),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _StatusBadge extends StatelessWidget {
   final bool active;
-
   const _StatusBadge({required this.active});
 
   @override
   Widget build(BuildContext context) {
-    final dot = active ? _kSuccess : _kFaint;
-    final text = active ? const Color(0xFF047857) : _kBody;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
       decoration: BoxDecoration(
         color: (active ? _kSuccess : _kMuted).withOpacity(0.12),
         borderRadius: BorderRadius.circular(20),
@@ -1602,13 +1627,16 @@ class _StatusBadge extends StatelessWidget {
           Container(
             width: 6,
             height: 6,
-            decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
+            decoration: BoxDecoration(
+              color: active ? _kSuccess : _kFaint,
+              shape: BoxShape.circle,
+            ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 5),
           Text(
-            active ? "Active" : "Inactive",
+            active ? 'Active' : 'Inactive',
             style: TextStyle(
-              color: text,
+              color: active ? const Color(0xFF047857) : _kBody,
               fontSize: 11.5,
               fontWeight: FontWeight.w600,
             ),
@@ -1619,20 +1647,208 @@ class _StatusBadge extends StatelessWidget {
   }
 }
 
-// ==================== EMPTY / ERROR STATE CARD ====================
+class _PlanTile extends StatelessWidget {
+  final OlxPlanData plan;
+  final Color accent;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _PlanTile({
+    required this.plan,
+    required this.accent,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final desc = _planDescription(plan);
+    return Material(
+      color: selected ? accent.withOpacity(0.08) : Colors.white,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: selected ? accent : _kBorder,
+              width: selected ? 1.6 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(color: accent, shape: BoxShape.circle),
+                child: const Icon(Icons.workspace_premium_outlined,
+                    color: Colors.white, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      plan.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w700,
+                        color: _kInk,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      desc.isEmpty
+                          ? _validityLabel(_planDays(plan))
+                          : '${_validityLabel(_planDays(plan))} • $desc',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12.5, color: _kMuted),
+                    ),
+                  ],
+                ),
+              ),
+              if (selected)
+                Icon(Icons.check_circle_rounded, color: accent, size: 20),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PricingTile extends StatelessWidget {
+  final String name;
+  final String? slug;
+  final String price;
+  final bool active;
+  final Color accent;
+
+  const _PricingTile({
+    required this.name,
+    required this.slug,
+    required this.price,
+    required this.active,
+    required this.accent,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final initial = name.trim().isEmpty ? '?' : name.trim()[0].toUpperCase();
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _kBorder),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: accent.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              initial,
+              style: TextStyle(
+                color: accent,
+                fontWeight: FontWeight.w800,
+                fontSize: 17,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: _kInk,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    _StatusBadge(active: active),
+                    if ((slug ?? '').isNotEmpty)
+                      Text(
+                        slug!,
+                        style: const TextStyle(fontSize: 11.5, color: _kFaint),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            price,
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w800,
+              color: accent,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LoadingCard extends StatelessWidget {
+  final String label;
+  const _LoadingCard({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 70),
+      decoration: _cardDecoration(),
+      child: Column(
+        children: [
+          const CircularProgressIndicator(color: _kBrand),
+          const SizedBox(height: 16),
+          Text(label, style: const TextStyle(color: _kMuted, fontSize: 13.5)),
+        ],
+      ),
+    );
+  }
+}
+
 class _StateCard extends StatelessWidget {
   final IconData icon;
   final Color iconColor;
   final String title;
   final String message;
-  final Widget? action;
+  final List<Widget> actions;
 
   const _StateCard({
     required this.icon,
     required this.iconColor,
     required this.title,
     required this.message,
-    this.action,
+    this.actions = const [],
   });
 
   @override
@@ -1640,11 +1856,7 @@ class _StateCard extends StatelessWidget {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 56),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _kBorder),
-      ),
+      decoration: _cardDecoration(),
       child: Column(
         children: [
           Container(
@@ -1671,12 +1883,18 @@ class _StateCard extends StatelessWidget {
             child: Text(
               message,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: _kMuted, fontSize: 13.5, height: 1.5),
+              style:
+              const TextStyle(color: _kMuted, fontSize: 13.5, height: 1.5),
             ),
           ),
-          if (action != null) ...[
+          if (actions.isNotEmpty) ...[
             const SizedBox(height: 22),
-            action!,
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              alignment: WrapAlignment.center,
+              children: actions,
+            ),
           ],
         ],
       ),
@@ -1684,446 +1902,430 @@ class _StateCard extends StatelessWidget {
   }
 }
 
-// ==================== LOADING SKELETON ====================
-class _PlanSkeletonRow extends StatefulWidget {
-  final int columns;
+class _InlineEmpty extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final String title;
+  final String message;
+  final String? actionLabel;
+  final VoidCallback? onAction;
 
-  const _PlanSkeletonRow({required this.columns});
-
-  @override
-  State<_PlanSkeletonRow> createState() => _PlanSkeletonRowState();
-}
-
-class _PlanSkeletonRowState extends State<_PlanSkeletonRow>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1000),
-  )..repeat(reverse: true);
-
-  late final Animation<double> _opacity = Tween<double>(begin: 0.45, end: 1.0)
-      .animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+  const _InlineEmpty({
+    required this.icon,
+    this.iconColor = _kBrand,
+    required this.title,
+    required this.message,
+    this.actionLabel,
+    this.onAction,
+  });
 
   @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  Widget _bar({double? width, required double height}) {
-    return Container(
-      width: width,
-      height: height,
-      decoration: BoxDecoration(
-        color: _kBorder,
-        borderRadius: BorderRadius.circular(6),
-      ),
-    );
-  }
-
-  Widget _skeletonCard() {
-    return Container(
-      height: 380,
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: _kBorder),
-        borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(44),
-          topRight: Radius.circular(6),
-          bottomLeft: Radius.circular(6),
-          bottomRight: Radius.circular(44),
-        ),
-      ),
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 34, horizontal: 12),
       child: Column(
         children: [
-          Align(
-            alignment: Alignment.centerRight,
-            child: _bar(width: 60, height: 20),
-          ),
-          const SizedBox(height: 16),
-          _bar(width: 120, height: 38),
-          const SizedBox(height: 10),
-          _bar(width: 80, height: 10),
-          const SizedBox(height: 28),
-          _bar(height: 10),
-          const SizedBox(height: 18),
-          _bar(height: 10),
-          const SizedBox(height: 18),
-          _bar(height: 10),
-          const Spacer(),
           Container(
-            width: 56,
-            height: 56,
-            decoration:
-            const BoxDecoration(color: _kBorder, shape: BoxShape.circle),
+            width: 60,
+            height: 60,
+            decoration: BoxDecoration(
+              color: iconColor.withOpacity(0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, size: 28, color: iconColor),
           ),
+          const SizedBox(height: 14),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              color: _kInk,
+            ),
+          ),
+          const SizedBox(height: 6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 380),
+            child: Text(
+              message,
+              textAlign: TextAlign.center,
+              style:
+              const TextStyle(color: _kMuted, fontSize: 13, height: 1.5),
+            ),
+          ),
+          if (actionLabel != null && onAction != null) ...[
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: onAction,
+              style: FilledButton.styleFrom(
+                backgroundColor: _kBrand,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              icon: const Icon(Icons.add_rounded, size: 18),
+              label: Text(actionLabel!),
+            ),
+          ],
         ],
       ),
     );
   }
-
-  @override
-  Widget build(BuildContext context) {
-    final children = <Widget>[];
-    for (var i = 0; i < widget.columns; i++) {
-      if (i > 0) children.add(const SizedBox(width: 20));
-      children.add(Expanded(child: _skeletonCard()));
-    }
-    return FadeTransition(
-      opacity: _opacity,
-      child: Row(children: children),
-    );
-  }
 }
 
-// ==================== PLAN CARDS GRID (RESPONSIVE, EQUAL-HEIGHT ROWS) ====================
-class _PlanCardsGrid extends StatelessWidget {
-  final List<OlxPlanData> plans;
-  final int columns;
-  final List<Color> accentColors;
-  final List<IconData> icons;
-  final void Function(OlxPlanData plan, Color accent, IconData icon) onView;
-
-  const _PlanCardsGrid({
-    required this.plans,
-    required this.columns,
-    required this.accentColors,
-    required this.icons,
-    required this.onView,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    const spacing = 22.0;
-    final rows = <Widget>[];
-
-    for (var start = 0; start < plans.length; start += columns) {
-      final rowChildren = <Widget>[];
-      for (var c = 0; c < columns; c++) {
-        if (c > 0) rowChildren.add(const SizedBox(width: spacing));
-        final index = start + c;
-        if (index < plans.length) {
-          final plan = plans[index];
-          // Keep accent stable per plan id for a consistent identity.
-          final accentIndex = plan.id.abs() % accentColors.length;
-          final accent = accentColors[accentIndex];
-          final icon = icons[accentIndex % icons.length];
-          rowChildren.add(
-            Expanded(
-              child: _PremiumPlanCard(
-                plan: plan,
-                accent: accent,
-                icon: icon,
-                onView: () => onView(plan, accent, icon),
-              ),
-            ),
-          );
-        } else {
-          rowChildren.add(const Expanded(child: SizedBox.shrink()));
-        }
-      }
-      if (rows.isNotEmpty) rows.add(const SizedBox(height: spacing));
-      rows.add(
-        IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: rowChildren,
-          ),
-        ),
-      );
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: rows,
-    );
-  }
-}
-
-// ==================== PREMIUM PLAN CARD (REFERENCE-INSPIRED) ====================
-class _PremiumPlanCard extends StatefulWidget {
-  final OlxPlanData plan;
-  final Color accent;
+class _InlineMessage extends StatelessWidget {
   final IconData icon;
-  final VoidCallback onView;
+  final Color color;
+  final String message;
+  final String actionLabel;
+  final VoidCallback onAction;
 
-  const _PremiumPlanCard({
-    required this.plan,
-    required this.accent,
+  const _InlineMessage({
     required this.icon,
-    required this.onView,
+    required this.color,
+    required this.message,
+    required this.actionLabel,
+    required this.onAction,
   });
 
   @override
-  State<_PremiumPlanCard> createState() => _PremiumPlanCardState();
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(message,
+                style: TextStyle(color: color, fontSize: 13, height: 1.4)),
+          ),
+          TextButton(onPressed: onAction, child: Text(actionLabel)),
+        ],
+      ),
+    );
+  }
 }
 
-class _PremiumPlanCardState extends State<_PremiumPlanCard> {
-  bool _hovering = false;
+class _ErrorBanner extends StatelessWidget {
+  final String message;
+  const _ErrorBanner({required this.message});
 
-  static const BorderRadius _outerRadius = BorderRadius.only(
-    topLeft: Radius.circular(44),
-    topRight: Radius.circular(6),
-    bottomLeft: Radius.circular(6),
-    bottomRight: Radius.circular(44),
-  );
-
-  static const BorderRadius _innerRadius = BorderRadius.only(
-    topLeft: Radius.circular(34),
-    topRight: Radius.circular(4),
-    bottomLeft: Radius.circular(4),
-    bottomRight: Radius.circular(34),
-  );
-
-  Widget _featureLine(String text, {bool muted = false}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 9),
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.error;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 1),
-            child: Icon(Icons.check_rounded, size: 16, color: widget.accent),
-          ),
+          Icon(Icons.error_outline, color: color, size: 20),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              text,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 13,
-                height: 1.4,
-                color: muted ? _kFaint : _kBody,
-                fontStyle: muted ? FontStyle.italic : FontStyle.normal,
-              ),
+              message,
+              style: TextStyle(color: color, fontSize: 13, height: 1.4),
             ),
           ),
         ],
       ),
     );
   }
+}
 
-  Widget _dashedDivider() {
-    return const SizedBox(
-      height: 1,
-      width: double.infinity,
-      child: CustomPaint(painter: _DashedLinePainter(Color(0xFFCBD5E1))),
-    );
-  }
+class _LabeledField extends StatelessWidget {
+  final String label;
+  final bool required;
+  final Widget child;
+
+  const _LabeledField({
+    required this.label,
+    required this.required,
+    required this.child,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final plan = widget.plan;
-    final accent = widget.accent;
-    final days = _planDays(plan);
-    final description = _planDescription(plan);
-    final status = _planStatus(plan);
-    final ring = Color.lerp(accent, Colors.black, 0.25)!;
-
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hovering = true),
-      onExit: (_) => setState(() => _hovering = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        curve: Curves.easeOut,
-        transform: Matrix4.translationValues(0, _hovering ? -4 : 0, 0),
-        decoration: BoxDecoration(
-          borderRadius: _outerRadius,
-          boxShadow: [
-            BoxShadow(
-              color: accent.withOpacity(_hovering ? 0.30 : 0.16),
-              blurRadius: _hovering ? 28 : 16,
-              offset: Offset(0, _hovering ? 14 : 8),
-            ),
-          ],
+    final errorColor = Theme.of(context).colorScheme.error;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text.rich(
+          TextSpan(
+            children: [
+              TextSpan(text: label),
+              if (required)
+                TextSpan(text: ' *', style: TextStyle(color: errorColor))
+              else
+                const TextSpan(
+                  text: '  (optional)',
+                  style: TextStyle(color: _kFaint, fontWeight: FontWeight.w400),
+                ),
+            ],
+          ),
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: _kInk,
+          ),
         ),
-        child: Material(
-          color: accent,
-          borderRadius: _outerRadius,
-          clipBehavior: Clip.antiAlias,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 14, 4, 0),
+        const SizedBox(height: 8),
+        child,
+      ],
+    );
+  }
+}
+
+class _ActiveSwitchTile extends StatelessWidget {
+  final bool value;
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+
+  const _ActiveSwitchTile({
+    required this.value,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: _kCanvas,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _kBorder),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            value
+                ? Icons.check_circle_outline_rounded
+                : Icons.pause_circle_outline_rounded,
+            color: value ? _kSuccess : _kMuted,
+            size: 22,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Inner white panel
-                Expanded(
-                  child: Container(
-                    decoration: const BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: _innerRadius,
-                    ),
-                    padding: const EdgeInsets.fromLTRB(22, 18, 22, 24),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: status != null
-                              ? _StatusBadge(active: status)
-                              : const SizedBox(height: 22),
-                        ),
-                        const SizedBox(height: 10),
-                        Text.rich(
-                          TextSpan(
-                            children: [
-                              TextSpan(
-                                text: '$days',
-                                style: TextStyle(
-                                  fontSize: 40,
-                                  height: 1.0,
-                                  fontWeight: FontWeight.w800,
-                                  letterSpacing: -1,
-                                  color: accent,
-                                ),
-                              ),
-                              TextSpan(
-                                text: days == 1 ? ' day' : ' days',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                  color: accent.withOpacity(0.85),
-                                ),
-                              ),
-                            ],
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 6),
-                        const Text(
-                          "Plan validity",
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 12, color: _kMuted),
-                        ),
-                        const SizedBox(height: 16),
-                        _dashedDivider(),
-                        _featureLine(_validityLabel(days)),
-                        _dashedDivider(),
-                        _featureLine(
-                          description.isEmpty
-                              ? "No description provided"
-                              : description,
-                          muted: description.isEmpty,
-                        ),
-                        _dashedDivider(),
-                        _featureLine("Reference ID #${plan.id}"),
-                        _dashedDivider(),
-                        const Spacer(),
-                        const SizedBox(height: 20),
-                        Center(
-                          child: AnimatedScale(
-                            scale: _hovering ? 1.06 : 1.0,
-                            duration: const Duration(milliseconds: 180),
-                            child: Container(
-                              width: 60,
-                              height: 60,
-                              decoration: BoxDecoration(
-                                color: accent,
-                                shape: BoxShape.circle,
-                                border: Border.all(color: ring, width: 4),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: accent.withOpacity(0.3),
-                                    blurRadius: 12,
-                                    offset: const Offset(0, 4),
-                                  ),
-                                ],
-                              ),
-                              child: Icon(widget.icon,
-                                  color: Colors.white, size: 26),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+                const Text(
+                  'Active status',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: _kInk,
+                    fontSize: 14,
                   ),
                 ),
-
-                // Footer: name tab (like reference) + details action
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(4, 12, 26, 12),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 14, vertical: 7),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              plan.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: accent,
-                                fontWeight: FontWeight.w700,
-                                fontSize: 15,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Tooltip(
-                        message: 'View plan details',
-                        child: TextButton.icon(
-                          onPressed: widget.onView,
-                          style: TextButton.styleFrom(
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 8),
-                            visualDensity: VisualDensity.compact,
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8)),
-                          ),
-                          icon: const Icon(Icons.visibility_outlined, size: 18),
-                          label: const Text(
-                            "Details",
-                            style: TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                const SizedBox(height: 2),
+                Text(
+                  value ? 'Will be saved as active' : 'Will be saved as inactive',
+                  style: const TextStyle(color: _kMuted, fontSize: 12.5),
                 ),
               ],
             ),
           ),
-        ),
+          Switch(
+            value: value,
+            activeTrackColor: _kBrand,
+            onChanged: enabled ? onChanged : null,
+          ),
+        ],
       ),
     );
   }
 }
 
-// ==================== DASHED DIVIDER PAINTER ====================
-class _DashedLinePainter extends CustomPainter {
-  final Color color;
+/// Common dialog frame (header / scrollable body / footer) used by both the
+/// "Create Plan" and "Add Pricing" popups.
+class _DialogShell extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool submitting;
+  final String submitLabel;
+  final String submittingLabel;
+  final IconData submitIcon;
+  final VoidCallback onSubmit;
+  final VoidCallback onCancel;
+  final Widget child;
 
-  const _DashedLinePainter(this.color);
+  const _DialogShell({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.submitting,
+    required this.submitLabel,
+    required this.submittingLabel,
+    required this.submitIcon,
+    required this.onSubmit,
+    required this.onCancel,
+    required this.child,
+  });
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 1;
-    const dash = 4.0;
-    const gap = 3.0;
-    final y = size.height / 2;
-    double x = 0;
-    while (x < size.width) {
-      final endX = (x + dash) > size.width ? size.width : x + dash;
-      canvas.drawLine(Offset(x, y), Offset(endX, y), paint);
-      x += dash + gap;
-    }
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final media = MediaQuery.of(context).size;
+    final isSmall = media.width < 640;
+    final width = isSmall ? media.width : 540.0;
+
+    final cancel = OutlinedButton(
+      onPressed: submitting ? null : onCancel,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: _kBody,
+        side: const BorderSide(color: _kBorder),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+      child: const Text('Cancel'),
+    );
+
+    final submit = FilledButton.icon(
+      onPressed: submitting ? null : onSubmit,
+      style: FilledButton.styleFrom(
+        backgroundColor: _kBrand,
+        foregroundColor: Colors.white,
+        disabledBackgroundColor: _kBrand.withOpacity(0.6),
+        disabledForegroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+      icon: submitting
+          ? const SizedBox(
+        width: 18,
+        height: 18,
+        child: CircularProgressIndicator(
+          color: Colors.white,
+          strokeWidth: 2,
+        ),
+      )
+          : Icon(submitIcon, size: 20),
+      label: Text(
+        submitting ? submittingLabel : submitLabel,
+        style: const TextStyle(fontWeight: FontWeight.w600),
+      ),
+    );
+
+    return Dialog(
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: isSmall ? 12 : 24,
+        vertical: 24,
+      ),
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.transparent,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: width,
+          maxHeight: media.height * 0.9,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 20, 12, 16),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: _kBrand.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(icon, color: _kBrand, size: 22),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: _kInk,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle,
+                          style: theme.textTheme.bodySmall
+                              ?.copyWith(color: _kMuted, fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Close',
+                    onPressed: submitting ? null : onCancel,
+                    icon: const Icon(Icons.close_rounded, color: _kMuted),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1, color: _kBorder),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+                child: child,
+              ),
+            ),
+            const Divider(height: 1, color: _kBorder),
+            Container(
+              color: _kCanvas,
+              padding: const EdgeInsets.fromLTRB(24, 14, 24, 18),
+              child: Row(
+                children: isSmall
+                    ? [
+                  Expanded(child: cancel),
+                  const SizedBox(width: 12),
+                  Expanded(child: submit),
+                ]
+                    : [
+                  Expanded(
+                    child: Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(
+                            text: '* ',
+                            style: TextStyle(
+                              color: theme.colorScheme.error,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const TextSpan(text: 'Required fields'),
+                        ],
+                      ),
+                      style:
+                      const TextStyle(color: _kMuted, fontSize: 12.5),
+                    ),
+                  ),
+                  cancel,
+                  const SizedBox(width: 12),
+                  submit,
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
-
-  @override
-  bool shouldRepaint(covariant _DashedLinePainter oldDelegate) =>
-      oldDelegate.color != color;
 }

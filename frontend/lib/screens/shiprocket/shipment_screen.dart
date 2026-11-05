@@ -11,6 +11,7 @@ import 'dart:html' as html;
 import 'package:linked_scroll_controller/linked_scroll_controller.dart';
 import '../../api/shiprocket_service.dart';
 import '../../models/shiprocket/shipment_model.dart';
+import '../../models/shiprocket/tracking_model.dart';
 
 class ShipmentScreen extends StatefulWidget {
   const ShipmentScreen({super.key});
@@ -21,6 +22,8 @@ class ShipmentScreen extends StatefulWidget {
 
 class _ShipmentScreenState extends State<ShipmentScreen> {
   final ShipmentService _service = ShipmentService();
+  final ShipmentTrackingService _trackingService = ShipmentTrackingService();  // ✅ हे नवीन add करा
+
 
   List<Shipment> allShipments = [];
   List<Shipment> filteredShipments = [];
@@ -88,6 +91,8 @@ class _ShipmentScreenState extends State<ShipmentScreen> {
     _rowsHorizontalController.dispose();
     _verticalController.dispose();
     _service.dispose();
+    _trackingService.dispose();   // ✅ हे नवीन add करा
+
     super.dispose();
   }
 
@@ -358,151 +363,81 @@ class _ShipmentScreenState extends State<ShipmentScreen> {
 
   // ===================== VIEW SHIPMENT POPUP =====================
 
+// ===================== VIEW SHIPMENT POPUP WITH TRACKING =====================
+
   void _showViewShipmentPopup(Shipment shipment) {
     showDialog(
       context: context,
       barrierDismissible: true,
-      builder: (context) {
-        return Dialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(28),
-          ),
-          backgroundColor: Colors.transparent,
-          child: Container(
-            width: MediaQuery.of(context).size.width * 0.6,
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(context).size.height * 0.85,
-            ),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Colors.white,
-                  _premiumBg,
-                ],
-              ),
-              borderRadius: BorderRadius.circular(28),
-              boxShadow: [
-                BoxShadow(
-                  color: _premiumPrimary.withOpacity(0.3),
-                  blurRadius: 40,
-                  offset: const Offset(0, 15),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildPopupHeader(
-                  title: 'Shipment Details',
-                  subtitle: shipment.orderNumber,
-                  icon: Icons.local_shipping,
-                ),
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Status Chips
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            _buildPremiumStatusChip(
-                              shipment.status,
-                              getStatusColor(shipment.status),
-                            ),
-                            const SizedBox(width: 12),
-                            _buildPremiumStatusChip(
-                              shipment.pickupStatus,
-                              getPickupStatusColor(shipment.pickupStatus),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 24),
-                        // Shipment Information
-                        _buildPremiumSection(
-                          title: "Shipment Information",
-                          icon: Icons.info_outline,
-                          children: [
-                            _buildDetailRow("Order Number", shipment.orderNumber),
-                            _buildDetailRow("ShipRocket Order ID", shipment.shiprocketOrderId),
-                            _buildDetailRow("Shipment ID", shipment.shipmentId),
-                            _buildDetailRow("AWB Code", shipment.awbCode.isEmpty ? "Not Assigned" : shipment.awbCode),
-                            _buildDetailRow("Courier Company", shipment.courierCompany.isEmpty ? "Not Assigned" : shipment.courierCompany),
-                            _buildDetailRow("Created At", _formatDate(shipment.createdAt)),
-                            _buildDetailRow("Updated At", _formatDate(shipment.updatedAt)),
-                          ],
-                        ),
-                        const SizedBox(height: 20),
-                        // Shipping Details
-                        _buildPremiumSection(
-                          title: "Shipping Details",
-                          icon: Icons.attach_money,
-                          children: [
-                            _buildDetailRow("Shipping Charge", "₹${shipment.shippingCharge}"),
-                            _buildDetailRow("Pickup Status", shipment.pickupStatus),
-                            _buildDetailRow("Pickup Request ID", shipment.pickupRequestId ?? "N/A"),
-                          ],
-                        ),
-                        const SizedBox(height: 20),
-                        // Assign AWB Button - Direct assign
-                        if (shipment.awbCode.isEmpty || shipment.courierCompany.isEmpty)
-                          SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton.icon(
-                              onPressed: (isAssigning && assigningShipmentId == shipment.shipmentId)
-                                  ? null
-                                  : () => _assignAWB(shipment),
-                              style: ElevatedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(vertical: 12),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                backgroundColor: _premiumPrimary,
-                                foregroundColor: Colors.white,
-                              ),
-                              icon: (isAssigning && assigningShipmentId == shipment.shipmentId)
-                                  ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                                ),
-                              )
-                                  : const Icon(Icons.assignment_add),
-                              label: (isAssigning && assigningShipmentId == shipment.shipmentId)
-                                  ? const Text('Assigning...')
-                                  : const Text('Assign AWB'),
-                            ),
-                          ),
-                        const SizedBox(height: 12),
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton(
-                            onPressed: () => Navigator.pop(context),
-                            style: OutlinedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              side: BorderSide(color: Colors.grey.shade400),
-                            ),
-                            child: const Text('Close'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
+      builder: (dialogContext) {
+        return _ShipmentDetailDialog(
+          shipment: shipment,
+          trackingService: _trackingService,
+          isAssigning: isAssigning,
+          assigningShipmentId: assigningShipmentId,
+          onAssignAWB: () => _assignAWBFromPopup(shipment, dialogContext),
+          getStatusColor: getStatusColor,
+          getPickupStatusColor: getPickupStatusColor,
+          formatDate: _formatDate,
         );
       },
     );
+  }
+
+// ===================== AWB ASSIGN FROM POPUP =====================
+
+  Future<void> _assignAWBFromPopup(Shipment shipment, BuildContext dialogContext) async {
+    setState(() {
+      isAssigning = true;
+      assigningShipmentId = shipment.shipmentId;
+    });
+
+    try {
+      final assignResponse = await _service.assignAWB(
+        shipmentId: shipment.shipmentId,
+      );
+
+      if (mounted) {
+        if (Navigator.canPop(dialogContext)) {
+          Navigator.pop(dialogContext);
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              assignResponse.success
+                  ? '✅ AWB assigned successfully!\nAWB: ${assignResponse.data?.response.data.awbCode ?? 'N/A'}\nCourier: ${assignResponse.data?.response.data.courierName ?? 'N/A'}'
+                  : '❌ Failed to assign AWB: ${assignResponse.message}',
+            ),
+            backgroundColor: assignResponse.success ? Colors.green : Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+
+        setState(() {
+          isAssigning = false;
+          assigningShipmentId = null;
+        });
+        loadShipments();
+      }
+    } catch (e) {
+      if (mounted) {
+        if (Navigator.canPop(dialogContext)) {
+          Navigator.pop(dialogContext);
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Error assigning AWB: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+        setState(() {
+          isAssigning = false;
+          assigningShipmentId = null;
+        });
+      }
+    }
   }
 
   // ===================== DIRECT AWB ASSIGNMENT =====================
@@ -1680,6 +1615,774 @@ class _ShipmentScreenState extends State<ShipmentScreen> {
             _buildPagination(),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ===================== SHIPMENT DETAIL DIALOG WITH TRACKING =====================
+
+class _ShipmentDetailDialog extends StatefulWidget {
+  final Shipment shipment;
+  final ShipmentTrackingService trackingService;
+  final bool isAssigning;
+  final String? assigningShipmentId;
+  final VoidCallback onAssignAWB;
+  final String Function(String) getStatusColor;
+  final String Function(String) getPickupStatusColor;
+  final String Function(String) formatDate;
+
+  const _ShipmentDetailDialog({
+    required this.shipment,
+    required this.trackingService,
+    required this.isAssigning,
+    required this.assigningShipmentId,
+    required this.onAssignAWB,
+    required this.getStatusColor,
+    required this.getPickupStatusColor,
+    required this.formatDate,
+  });
+
+  @override
+  State<_ShipmentDetailDialog> createState() => _ShipmentDetailDialogState();
+}
+
+class _ShipmentDetailDialogState extends State<_ShipmentDetailDialog> {
+  bool _isTrackingLoading = true;
+  TrackShipmentResponse? _trackingResponse;
+
+  static const Color _premiumPrimary = Color(0xFF5A67F2);
+  static const Color _premiumBg = Color(0xFFF7F8FF);
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchTracking();
+  }
+
+  Future<void> _fetchTracking() async {
+    try {
+      final response = await widget.trackingService.trackShipment(
+        shipmentId: widget.shipment.shipmentId,
+      );
+      if (mounted) {
+        setState(() {
+          _trackingResponse = response;
+          _isTrackingLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _trackingResponse = TrackShipmentResponse(
+            success: false,
+            message: 'Failed to load tracking: $e',
+          );
+          _isTrackingLoading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final shipment = widget.shipment;
+
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+      backgroundColor: Colors.transparent,
+      child: Container(
+        width: MediaQuery.of(context).size.width * 0.6,
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.9,
+        ),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Colors.white, _premiumBg],
+          ),
+          borderRadius: BorderRadius.circular(28),
+          boxShadow: [
+            BoxShadow(
+              color: _premiumPrimary.withOpacity(0.3),
+              blurRadius: 40,
+              offset: const Offset(0, 15),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildPopupHeader(
+              title: 'Shipment Details',
+              subtitle: shipment.orderNumber,
+              icon: Icons.local_shipping,
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        _buildPremiumStatusChip(
+                          shipment.status,
+                          widget.getStatusColor(shipment.status),
+                        ),
+                        const SizedBox(width: 12),
+                        _buildPremiumStatusChip(
+                          shipment.pickupStatus,
+                          widget.getPickupStatusColor(shipment.pickupStatus),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                    _buildPremiumSection(
+                      title: "Shipment Information",
+                      icon: Icons.info_outline,
+                      children: [
+                        _buildDetailRow("Order Number", shipment.orderNumber),
+                        _buildDetailRow("ShipRocket Order ID", shipment.shiprocketOrderId),
+                        _buildDetailRow("Shipment ID", shipment.shipmentId),
+                        _buildDetailRow("AWB Code", shipment.awbCode.isEmpty ? "Not Assigned" : shipment.awbCode),
+                        _buildDetailRow("Courier Company", shipment.courierCompany.isEmpty ? "Not Assigned" : shipment.courierCompany),
+                        _buildDetailRow("Created At", widget.formatDate(shipment.createdAt)),
+                        _buildDetailRow("Updated At", widget.formatDate(shipment.updatedAt)),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                    _buildPremiumSection(
+                      title: "Shipping Details",
+                      icon: Icons.attach_money,
+                      children: [
+                        _buildDetailRow("Shipping Charge", "₹${shipment.shippingCharge}"),
+                        _buildDetailRow("Pickup Status", shipment.pickupStatus),
+                        _buildDetailRow("Pickup Request ID", shipment.pickupRequestId ?? "N/A"),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                    // ===================== TRACKING SECTION =====================
+                    _buildPremiumSection(
+                      title: "Tracking Details",
+                      icon: Icons.timeline,
+                      children: [
+                        if (_isTrackingLoading)
+                          const Center(
+                            child: Padding(
+                              padding: EdgeInsets.all(20),
+                              child: CircularProgressIndicator(),
+                            ),
+                          )
+                        else if (_trackingResponse == null)
+                          const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: Center(
+                              child: Text('No tracking data available',
+                                  style: TextStyle(color: Colors.grey)),
+                            ),
+                          )
+                        else if (!_trackingResponse!.success)
+                            Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Center(
+                                child: Text(_trackingResponse!.message,
+                                    style: const TextStyle(color: Colors.red)),
+                              ),
+                            )
+                          else if (_trackingResponse!.data?.trackingData == null)
+                              const Padding(
+                                padding: EdgeInsets.all(12),
+                                child: Center(
+                                  child: Text('No tracking data available',
+                                      style: TextStyle(color: Colors.grey)),
+                                ),
+                              )
+                            else
+                              _buildTrackingContent(_trackingResponse!.data!.trackingData!),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                    if (shipment.awbCode.isEmpty || shipment.courierCompany.isEmpty)
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: (widget.isAssigning &&
+                              widget.assigningShipmentId == shipment.shipmentId)
+                              ? null
+                              : widget.onAssignAWB,
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            backgroundColor: _premiumPrimary,
+                            foregroundColor: Colors.white,
+                          ),
+                          icon: (widget.isAssigning &&
+                              widget.assigningShipmentId == shipment.shipmentId)
+                              ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                            ),
+                          )
+                              : const Icon(Icons.assignment_add),
+                          label: (widget.isAssigning &&
+                              widget.assigningShipmentId == shipment.shipmentId)
+                              ? const Text('Assigning...')
+                              : const Text('Assign AWB'),
+                        ),
+                      ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(context),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          side: BorderSide(color: Colors.grey.shade400),
+                        ),
+                        child: const Text('Close'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ===================== TRACKING CONTENT =====================
+
+  Widget _buildTrackingContent(TrackingData trackingData) {
+    final track = trackingData.shipmentTrack.isNotEmpty
+        ? trackingData.shipmentTrack.first
+        : null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (track != null) ...[
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  _premiumPrimary.withOpacity(0.1),
+                  const Color(0xFFC84DB5).withOpacity(0.1),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    _buildTrackingInfoItem("Current Status", track.currentStatus),
+                    _buildTrackingInfoItem("Courier", track.courierName),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    _buildTrackingInfoItem("Origin", track.origin),
+                    _buildTrackingInfoItem("Destination", track.destination),
+                  ],
+                ),
+                if (track.deliveredDate != null && track.deliveredDate!.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _buildTrackingInfoItem("Delivered Date", widget.formatDate(track.deliveredDate!)),
+                      if (track.deliveredTo != null && track.deliveredTo!.isNotEmpty)
+                        _buildTrackingInfoItem("Delivered To", track.deliveredTo!),
+                    ],
+                  ),
+                ],
+                if (track.consigneeName != null && track.consigneeName!.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      _buildTrackingInfoItem("Consignee", track.consigneeName!),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+        if (trackingData.shipmentTrackActivities.isNotEmpty) ...[
+          const Text(
+            "Tracking History",
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF1E293B),
+            ),
+          ),
+          const SizedBox(height: 12),
+          ...trackingData.shipmentTrackActivities.asMap().entries.map((entry) {
+            final index = entry.key;
+            final activity = entry.value;
+            final isFirst = index == 0;
+            final isLast = index == trackingData.shipmentTrackActivities.length - 1;
+            return _buildTimelineItem(
+              activity: activity,
+              isFirst: isFirst,
+              isLast: isLast,
+            );
+          }).toList(),
+        ] else ...[
+          const Padding(
+            padding: EdgeInsets.all(12),
+            child: Center(
+              child: Text('No tracking activities available',
+                  style: TextStyle(color: Colors.grey)),
+            ),
+          ),
+        ],
+        if (trackingData.trackUrl != null && trackingData.trackUrl!.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: _premiumPrimary.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: _premiumPrimary.withOpacity(0.2)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.link, size: 16, color: Color(0xFF5A67F2)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    trackingData.trackUrl!,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF5A67F2),
+                      decoration: TextDecoration.underline,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildTrackingInfoItem(String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            color: Colors.grey,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            color: Color(0xFF1E293B),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTimelineItem({
+    required ShipmentTrackActivity activity,
+    required bool isFirst,
+    required bool isLast,
+  }) {
+    final statusColor = _getTrackingStatusColor(activity.srStatusLabel);
+
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 24,
+            child: Column(
+              children: [
+                Container(
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(
+                    color: statusColor,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: statusColor.withOpacity(0.3),
+                        blurRadius: 4,
+                      ),
+                    ],
+                  ),
+                ),
+                if (!isLast)
+                  Expanded(
+                    child: Container(
+                      width: 2,
+                      color: Colors.grey.shade300,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: isFirst ? statusColor.withOpacity(0.05) : Colors.white,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: isFirst
+                      ? statusColor.withOpacity(0.3)
+                      : Colors.grey.shade200,
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: statusColor.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          activity.srStatusLabel,
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                            color: statusColor,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        _formatTrackingDate(activity.date),
+                        style: const TextStyle(
+                          fontSize: 9,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    activity.activity,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF1E293B),
+                    ),
+                  ),
+                  if (activity.location.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.location_on,
+                          size: 10,
+                          color: Colors.grey.shade500,
+                        ),
+                        const SizedBox(width: 2),
+                        Expanded(
+                          child: Text(
+                            activity.location,
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Colors.grey.shade600,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _getTrackingStatusColor(String statusLabel) {
+    final label = statusLabel.toUpperCase();
+    if (label.contains('DELIVERED')) return const Color(0xFF10B981);
+    if (label.contains('OUT FOR DELIVERY')) return const Color(0xFFF59E0B);
+    if (label.contains('IN TRANSIT')) return const Color(0xFF3B82F6);
+    if (label.contains('PICKED UP')) return const Color(0xFF8B5CF6);
+    if (label.contains('SHIPPED')) return const Color(0xFF10B981);
+    if (label.contains('OUT FOR PICKUP')) return const Color(0xFFF59E0B);
+    if (label.contains('REACHED AT DESTINATION')) return const Color(0xFF06B6D4);
+    if (label.contains('CANCEL')) return const Color(0xFFEF4444);
+    if (label.contains('RTO')) return const Color(0xFFEF4444);
+    return const Color(0xFF6B7280);
+  }
+
+  String _formatTrackingDate(String dateTime) {
+    try {
+      final parts = dateTime.split(' ');
+      if (parts.length == 2) {
+        final dateParts = parts[0].split('-');
+        if (dateParts.length == 3) {
+          final months = [
+            'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+            'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+          ];
+          final monthIndex = int.tryParse(dateParts[1]) ?? 1;
+          final monthName = months[monthIndex - 1];
+          final timeParts = parts[1].split(':');
+          return '${dateParts[2]} $monthName ${dateParts[0]}, ${timeParts[0]}:${timeParts[1]}';
+        }
+      }
+      return dateTime;
+    } catch (e) {
+      return dateTime;
+    }
+  }
+
+  // ===================== POPUP HELPERS =====================
+
+  Widget _buildPopupHeader({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+  }) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(24, 20, 20, 16),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: [
+            Color(0xFF5A67F2),
+            Color(0xFF7B4DDB),
+            Color(0xFFC84DB5),
+          ],
+        ),
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(28),
+          topRight: Radius.circular(28),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: Colors.white, size: 24),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: Colors.white70,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(30),
+            ),
+            child: IconButton(
+              icon: const Icon(Icons.close, color: Colors.white),
+              onPressed: () => Navigator.pop(context),
+              padding: const EdgeInsets.all(8),
+              constraints: const BoxConstraints(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPremiumStatusChip(String status, String colorHex) {
+    final color = Color(int.parse('0xFF${colorHex.substring(1)}'));
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.5)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            status,
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w600,
+              fontSize: 11,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPremiumSection({
+    required String title,
+    required IconData icon,
+    required List<Widget> children,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                  colors: [
+                    Color(0xFF5A67F2),
+                    Color(0xFF7B4DDB),
+                    Color(0xFFC84DB5),
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, size: 18, color: Colors.white),
+            ),
+            const SizedBox(width: 12),
+            ShaderMask(
+              shaderCallback: (bounds) => const LinearGradient(
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+                colors: [
+                  Color(0xFF5A67F2),
+                  Color(0xFF7B4DDB),
+                  Color(0xFFC84DB5),
+                ],
+              ).createShader(bounds),
+              child: Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.04),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: children,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDetailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 110,
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: Color(0xFF1E293B),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
